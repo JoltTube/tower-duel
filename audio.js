@@ -223,6 +223,16 @@ window.SFX = (function () {
     ui: function () {
       tone({ freq: 680, type: "sine", dur: 0.05, vol: 0.14 });
     },
+    // satisfying clicky block placement — a woodblock/marimba "tok" that climbs the scale with your streak
+    place: function (streak) {
+      var steps = [0, 2, 4, 5, 7, 9, 11, 12];
+      var semi = steps[((streak || 1) - 1) % steps.length] + 12 * Math.floor(Math.min(streak || 1, 40) / steps.length);
+      var f = 523.25 * Math.pow(2, semi / 12);
+      noise({ dur: 0.012, f: 5200, vol: 0.16 });                                                        // crisp click transient
+      tone({ freq: f, type: "triangle", dur: 0.13, vol: 0.36, atk: 0.001, glideDur: 0.02, fm: { ratio: 3, depth: 0.9 }, lp: 9000, rev: 0.16 }); // bright body
+      tone({ freq: f * 2, type: "sine", dur: 0.07, vol: 0.13, when: 0.004, rev: 0.12 });                // shimmer octave
+      tone({ freq: f * 0.5, type: "sine", dur: 0.09, vol: 0.12, when: 0.002 });                         // low thump for weight
+    },
     start: function () {
       [392, 523, 659, 784].forEach(function (f, k) { tone({ freq: f, type: "sine", dur: 0.24, vol: 0.34, when: k * 0.07, fm: { ratio: 2, depth: 0.3 }, lp: 7000, rev: 0.3 }); });
     },

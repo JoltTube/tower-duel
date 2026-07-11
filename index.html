@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Luckiest+Guy&family=Comic+Neue:wght@700;900&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="versus.css?v=4" />
+  <link rel="stylesheet" href="versus.css?v=5" />
 </head>
 <body>
   <div id="stage">
@@ -72,6 +72,7 @@
         <label class="pl-toggle"><span>Edit layout (drag to move · scroll to resize)</span><input type="checkbox" id="editLayout" /><span class="pl-sw"></span></label>
         <div class="pl-row"><span>Win at (points)</span><input type="number" id="winScoreInput" min="10" step="10" class="pl-num" /></div>
         <div class="pl-row"><span>Block speed</span><input type="range" id="speedRange" min="8" max="60" step="1" /></div>
+        <div class="pl-row"><span>Clicks stack</span><select id="clickSideSel" class="pl-num"><option value="both">Both sides</option><option value="red">Villains only</option><option value="blue">Heroes only</option></select></div>
         <div class="pl-row"><span>Sound</span><input type="range" id="volRange" min="0" max="100" step="1" value="60" /></div>
         <button id="resetLayout" class="pl-textbtn">Reset layout to default</button>
       </div>
@@ -94,7 +95,7 @@
   <script src="lib/LineMaterial.js"></script>
   <script src="lib/LineSegments2.js"></script>
   <script src="lib/Line2.js"></script>
-  <script src="audio.js?v=4"></script>
-  <script src="versus.js?v=4"></script>
+  <script src="audio.js?v=5"></script>
+  <script src="versus.js?v=5"></script>
 </body>
 </html>

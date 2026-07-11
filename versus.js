@@ -40,6 +40,7 @@ const LAND_TOL = SIZE * 0.6;     // click with the block within this of centre =
 const MISS_PENALTY = 10;         // mistimed click -> block falls off, tower drops this many
 const tri = (p) => 4 * Math.abs((p % 1 + 1) % 1 - 0.5) - 1; // -1..1 triangle wave (constant speed)
 let slideSpeed = Math.max(0.08, Math.min(0.6, parseFloat(load("slideSpeed", "0.2")) || 0.2)); // full slide cycles/sec-ish
+let clickSide = load("clickSide", "blue"); // which side a click stacks: "both" | "red" | "blue"
 
 let winScore = parseInt(load("winScore", 1000), 10) || 1000;
 const amounts = {};
@@ -59,7 +60,7 @@ const state = {
 
 /* ---------------- three.js setup ---------------- */
 const stageEl = el("stage");
-let renderer, cam, unitGeo, unitEdges, lineGeo, edgeMat, FAT = false;
+let renderer, cam, unitGeo, unitEdges, lineGeo, edgeBlack, edgeWhite, FAT = false;
 let towers = {};
 let W = 0, H = 0, T = 0, DPR = Math.min(1.75, window.devicePixelRatio || 1);
 
@@ -91,17 +92,17 @@ function buildScene(palette) {
   const key = new THREE.DirectionalLight(0xffffff, 0.95); key.position.set(14, 20, 7); scene.add(key);
   const fill = new THREE.DirectionalLight(0xcfe0ff, 0.25); fill.position.set(-12, 6, -9); scene.add(fill);
   const pool = [];
-  for (let k = 0; k <= POOL; k++) pool.push(addBlock(scene));   // last one is the mover
+  for (let k = 0; k < POOL; k++) pool.push(addBlock(scene, false)); // placed blocks: black stroke
+  pool.push(addBlock(scene, true));                                 // the moving block: white stroke
   return { scene, pool, mover: pool[POOL], palette };
 }
-// clean black silhouette stroke around each rounded block (inverted hull)
-let OUTLINE_MAT;
-function addEdges(group) { const o = new THREE.Mesh(unitGeo, OUTLINE_MAT); o.scale.set(1.05, 1.16, 1.05); group.add(o); }
-function addBlock(scene) {
+// bold stroke on EVERY edge (fat lines from the same geo -> perfectly aligned). white = the moving block, black = placed.
+function addEdges(group, white) { const m = white ? edgeWhite : edgeBlack; group.add(FAT ? new THREE.LineSegments2(lineGeo, m) : new THREE.LineSegments(unitEdges, m)); }
+function addBlock(scene, white) {
   const group = new THREE.Group(); group.scale.set(SIZE, BOX_HEIGHT, SIZE);
   const mat = new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 46, specular: new THREE.Color(0x5a5a5a), emissive: new THREE.Color(0x000000) });
   group.add(new THREE.Mesh(unitGeo, mat));
-  addEdges(group);
+  addEdges(group, white);
   scene.add(group);
   return { group, mat };
 }
@@ -109,8 +110,11 @@ function setupThree() {
   const canvas = el("game");
   renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, stencil: false, powerPreference: "high-performance" });
   renderer.setClearColor(0x000000, 0); renderer.autoClear = false;
-  unitGeo = roundedBox(1, 0.82, 1, 0.07, 4); applyVertexShade(unitGeo); // rounded/curvy edges
-  OUTLINE_MAT = new THREE.MeshBasicMaterial({ color: 0x0a0a12, side: THREE.BackSide });
+  unitGeo = new THREE.BoxGeometry(1, 0.86, 1); applyVertexShade(unitGeo);  // squared blocks (groove between)
+  unitEdges = new THREE.EdgesGeometry(unitGeo);                             // same geo -> stroke on every edge, aligned
+  FAT = !!(THREE.LineSegmentsGeometry && THREE.LineMaterial && THREE.LineSegments2);
+  if (FAT) { lineGeo = new THREE.LineSegmentsGeometry().fromEdgesGeometry(unitEdges); edgeBlack = new THREE.LineMaterial({ color: 0x0a0a12, linewidth: 3.5 }); edgeWhite = new THREE.LineMaterial({ color: 0xffffff, linewidth: 4.5 }); }
+  else { edgeBlack = new THREE.LineBasicMaterial({ color: 0x0a0a12 }); edgeWhite = new THREE.LineBasicMaterial({ color: 0xffffff }); }
   cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 500);
   towers.red = buildScene(RED_PALETTE); towers.blue = buildScene(BLUE_PALETTE);
 }
@@ -332,7 +336,9 @@ function placeOne(team) {
   if (Math.abs(st.moverOffset) <= LAND_TOL) {
     // TIMED RIGHT -> block lands (full size, straight), +1
     st.score += 1; st.pop = 1; st.glow = 0.6;
-    sfx("perfect", (st.streak = (st.streak || 0) + 1));
+    st.streak = (st.streak || 0) + 1;
+    ringPulse(team); addStars(team, 8);        // circle + stars on every click
+    sfx("place", st.streak);                   // satisfying clicky placement
     checkWin(team); updateHud(team);
   } else {
     // MISTIMED -> the block slides right off the tower and you drop 10
@@ -341,7 +347,7 @@ function placeOne(team) {
     flash(teamName(team) + " MISS  −" + MISS_PENALTY, "#ff5a52"); sfx("miss"); updateHud(team);
   }
 }
-function stackClick() { ensureAudio(); placeOne("red"); placeOne("blue"); }
+function stackClick() { ensureAudio(); if (clickSide === "both" || clickSide === "red") placeOne("red"); if (clickSide === "both" || clickSide === "blue") placeOne("blue"); }
 function spawnMissBlock(team, dir) { // the full block that missed tumbles off into the void
   const t = towers[team], y0 = BOX_HEIGHT * (Math.floor(state[team].disp) + 1);
   const g = new THREE.Group(); g.scale.set(SIZE, BOX_HEIGHT, SIZE);
@@ -480,6 +486,7 @@ function resize() {
   renderer.setPixelRatio(DPR); renderer.setSize(W, H, false);
   const halfAspect = (W / 2) / H, viewW = VIEW_H * halfAspect;
   cam.left = -viewW / 2; cam.right = viewW / 2; cam.top = VIEW_H / 2; cam.bottom = -VIEW_H / 2; cam.updateProjectionMatrix();
+  if (FAT) { edgeBlack.resolution.set(W / 2, H); edgeWhite.resolution.set(W / 2, H); } // fat-line thickness in px
   skyRed = makeSky(0, W / 2); skyBlue = makeSky(W / 2, W);
 }
 function frame() {
@@ -553,6 +560,8 @@ function init() {
   vol.addEventListener("input", () => { v = +vol.value; save("vol", v); if (window.SFX) SFX.setVolume(v / 100); });
   const spd = el("speedRange"); spd.value = Math.round(slideSpeed * 100);
   spd.addEventListener("input", () => { slideSpeed = +spd.value / 100; save("slideSpeed", slideSpeed); });
+  const css = el("clickSideSel"); css.value = clickSide;
+  css.addEventListener("change", () => { clickSide = css.value; save("clickSide", clickSide); });
   const wsi = el("winScoreInput"); wsi.value = winScore;
   wsi.addEventListener("change", () => { winScore = Math.max(10, parseInt(wsi.value, 10) || 1000); wsi.value = winScore; save("winScore", winScore); updateHud("red"); updateHud("blue"); });
   const panel = el("panel"); const toggle = () => { ensureAudio(); panel.classList.toggle("open"); };
