@@ -223,12 +223,11 @@ window.SFX = (function () {
     ui: function () {
       tone({ freq: 680, type: "sine", dur: 0.05, vol: 0.14 });
     },
-    // futuristic / anime UI "place" — bright FM chime + a synth blip with an upward sweep, spacey reverb. Fixed every time.
+    // soft satisfying "thock" — clicky like a nice keycap but rounded + musical, short, no harsh tail
     place: function () {
-      noise({ dur: 0.016, bp: true, f: 6000, fEnd: 10500, q: 2, vol: 0.07 });                                            // crisp digital tick
-      tone({ freq: 740, freqEnd: 990, type: "triangle", dur: 0.19, vol: 0.32, atk: 0.001, glideDur: 0.05, fm: { ratio: 3.5, depth: 1.4 }, lp: 9500, rev: 0.32 }); // bright metallic chime
-      tone({ freq: 420, freqEnd: 1500, type: "sawtooth", dur: 0.1, vol: 0.15, atk: 0.001, glideDur: 0.08, detune: 10, lp: 8000, rev: 0.2 });                       // energetic synth blip up
-      tone({ freq: 1980, type: "sine", dur: 0.17, vol: 0.1, when: 0.015, rev: 0.36 });                                    // high sparkle tail
+      noise({ dur: 0.018, f: 2400, fEnd: 600, vol: 0.15 });                                                  // muffled key click
+      tone({ freq: 250, freqEnd: 175, type: "sine", dur: 0.1, vol: 0.44, atk: 0.001, glideDur: 0.05, lp: 1800 }); // low thock body (the satisfying part)
+      tone({ freq: 470, type: "triangle", dur: 0.045, vol: 0.13, atk: 0.001, lp: 2600 });                    // slight mid for definition
     },
     start: function () {
       [392, 523, 659, 784].forEach(function (f, k) { tone({ freq: f, type: "sine", dur: 0.24, vol: 0.34, when: k * 0.07, fm: { ratio: 2, depth: 0.3 }, lp: 7000, rev: 0.3 }); });
