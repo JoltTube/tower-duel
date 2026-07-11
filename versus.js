@@ -34,11 +34,13 @@ const BLUE_PALETTE = [0x2f9dff];  // one solid blue
 
 /* stack look (matches the original game) */
 const BOX_HEIGHT = 2.2, SIZE = 6.4, VIEW_H = 50, POOL = 30, STAGE_RATIO = 0.82;
-/* click-to-stack tuning */
-const SLIDE_AMP = SIZE * 0.6;    // how far the moving block slides each way
-const PERFECT_W = SIZE * 0.13;   // misalignment within this = perfect (no slice)
-const GROW_W = SIZE * 0.2;       // width regained every 5-perfect streak
-const MIN_W = SIZE * 0.2;        // narrowest a tower can slice down to
+/* click-to-stack tuning (ported from the stack game: slide, drop, slice, perfect, grow) */
+const SLIDE_AMP = SIZE * 1.15;   // slides fully past the edge, so you CAN whiff into the void
+const SLIDE_F = 0.34;            // slide speed (full back-and-forth ~3s), constant speed
+const ASSIST = 0.16;             // within this fraction of the block = a PERFECT (snap on)
+const GROW_W = SIZE * 0.22;      // size regained every 5-perfect streak
+const MISS_PENALTY = 10;         // complete whiff (no overlap) drops the tower this many
+const tri = (p) => 4 * Math.abs((p % 1 + 1) % 1 - 0.5) - 1; // -1..1 triangle wave (constant speed)
 
 let winScore = parseInt(load("winScore", 1000), 10) || 1000;
 const amounts = {};
@@ -107,10 +109,10 @@ function setupThree() {
   const canvas = el("game");
   renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, stencil: false, powerPreference: "high-performance" });
   renderer.setClearColor(0x000000, 0); renderer.autoClear = false;
-  unitGeo = roundedBox(1, 0.82, 1, 0.028, 3); applyVertexShade(unitGeo); // barely rounded
-  unitEdges = new THREE.EdgesGeometry(new THREE.BoxGeometry(0.99, 0.8, 0.99)); // sharp-box edges -> clean 12 lines on every edge
+  unitGeo = new THREE.BoxGeometry(1, 0.86, 1); applyVertexShade(unitGeo); // clean sharp cube (leaves a groove between blocks)
+  unitEdges = new THREE.EdgesGeometry(unitGeo);                            // outline from the SAME geo -> perfectly aligned on every edge
   FAT = !!(THREE.LineSegmentsGeometry && THREE.LineMaterial && THREE.LineSegments2);
-  if (FAT) { lineGeo = new THREE.LineSegmentsGeometry().fromEdgesGeometry(unitEdges); edgeMat = new THREE.LineMaterial({ color: 0x0a0a12, linewidth: 3 }); }
+  if (FAT) { lineGeo = new THREE.LineSegmentsGeometry().fromEdgesGeometry(unitEdges); edgeMat = new THREE.LineMaterial({ color: 0x0a0a12, linewidth: 3.5 }); }
   else edgeMat = new THREE.LineBasicMaterial({ color: 0x0a0a12 });
   cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 500);
   towers.red = buildScene(RED_PALETTE); towers.blue = buildScene(BLUE_PALETTE);
@@ -129,8 +131,8 @@ function updateTower(team) {
     b.mat.color.setHex(t.palette[idx % t.palette.length]);
     const gl = st.glow * (k < 3 ? 0.4 : 0.18); b.mat.emissive.setRGB(gl, gl, gl);
   }
-  // moving block: opposite directions (blue mirrors red) but both cross the centre together; frozen when paused
-  st.moverOffset = towerFrozen(team) ? st.topX : Math.sin(T * 1.6) * SLIDE_AMP * (team === "red" ? 1 : -1);
+  // moving block: constant-speed slide over the block below, blue mirrors red (opposite dir, meet in middle), frozen when paused
+  st.moverOffset = towerFrozen(team) ? st.topX : st.topX + tri(T * SLIDE_F) * SLIDE_AMP * (team === "red" ? 1 : -1);
   const mv = t.mover;
   mv.group.visible = true;
   const mpop = 1 + st.pop * 0.22;
@@ -187,7 +189,7 @@ function updateDebris() {
 const bg = el("bg"), bgx = bg.getContext("2d");
 const fx = el("fx"), fxx = fx.getContext("2d");
 let skyRed = [], skyBlue = [];
-let particles = [], bombs = [], flyers = [], rings = [], debris = [], shake = 0;
+let particles = [], bombs = [], flyers = [], rings = [], debris = [], explosionText = [], shake = 0;
 function makeSky(x0, x1) { const a = []; let x = x0, s = Math.floor(x0) + 13; const rnd = () => { s = (s * 9301 + 49297) % 233280; return s / 233280; }; while (x < x1) { const w = 14 + rnd() * 26, h = 24 + rnd() * 120; a.push({ x, w, h }); x += w + 3 + rnd() * 9; } return a; }
 function towerTop(team) { return { x: team === "red" ? W * 0.25 : W * 0.75, y: H * 0.47 }; } // screen pos of the tower top
 function drawBG() {
@@ -269,11 +271,32 @@ function drawFX() {
     fxx.beginPath(); fxx.ellipse(r.x, r.y, r.r, r.r * 0.55, 0, 0, 7); fxx.stroke();
     fxx.restore();
   }
-  // particles
-  for (let i = particles.length - 1; i >= 0; i--) { const p = particles[i]; p.vy += p.g; p.x += p.vx; p.y += p.vy; p.life -= p.decay; if (p.life <= 0) { particles.splice(i, 1); continue; } fxx.globalAlpha = Math.max(0, p.life); fxx.fillStyle = p.color; fxx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size); }
+  // particles (squares for debris/sparks; glowing 4-point stars for star bursts)
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i]; p.vy += p.g; p.x += p.vx; p.y += p.vy; p.life -= p.decay;
+    if (p.life <= 0) { particles.splice(i, 1); continue; }
+    fxx.globalAlpha = Math.max(0, p.life); fxx.fillStyle = p.color;
+    if (p.star) {
+      fxx.save(); fxx.translate(p.x, p.y); fxx.shadowColor = p.color; fxx.shadowBlur = 10;
+      const s = p.size * p.life; fxx.beginPath();
+      for (let k = 0; k < 4; k++) { const a = k * Math.PI / 2; fxx.lineTo(Math.cos(a) * s, Math.sin(a) * s); fxx.lineTo(Math.cos(a + Math.PI / 4) * s * 0.4, Math.sin(a + Math.PI / 4) * s * 0.4); }
+      fxx.closePath(); fxx.fill(); fxx.restore();
+    } else fxx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+  }
   fxx.globalAlpha = 1;
   // steal flyers
   for (let i = flyers.length - 1; i >= 0; i--) { const f = flyers[i]; f.t += 1 / 60; if (f.t < 0) continue; const p = Math.min(1, f.t / f.dur); const x = f.sx + (f.ex - f.sx) * p, y = f.sy + (f.ey - f.sy) * p - Math.sin(Math.PI * p) * 130; fxx.globalAlpha = 1 - Math.max(0, (p - 0.8) / 0.2); fxx.fillStyle = f.color; fxx.fillRect(x - 7, y - 7, 14, 14); fxx.strokeStyle = "#fff"; fxx.lineWidth = 1.5; fxx.strokeRect(x - 7, y - 7, 14, 14); if (p >= 1) flyers.splice(i, 1); }
+  fxx.globalAlpha = 1;
+  // "EXPLOSION" neon text on a blast
+  for (let i = explosionText.length - 1; i >= 0; i--) {
+    const e = explosionText[i]; e.life -= 0.014; if (e.life <= 0) { explosionText.splice(i, 1); continue; }
+    const grow = 1 + (1 - e.life) * 0.4, col = e.team === "red" ? "#ff3b57" : "#38b6ff";
+    fxx.save(); fxx.translate(e.x, e.y - 6); fxx.scale(grow, grow); fxx.globalAlpha = Math.min(1, e.life * 2);
+    fxx.font = "900 40px 'Luckiest Guy', sans-serif"; fxx.textAlign = "center"; fxx.textBaseline = "middle";
+    fxx.lineJoin = "round"; fxx.strokeStyle = "#0a0a12"; fxx.lineWidth = 7; fxx.strokeText("EXPLOSION", 0, 0);
+    fxx.shadowColor = col; fxx.shadowBlur = 16; fxx.fillStyle = col; fxx.fillText("EXPLOSION", 0, 0);
+    fxx.restore();
+  }
   fxx.globalAlpha = 1;
   fxx.restore();
 }
@@ -293,7 +316,7 @@ function addPoints(team, delta) {
   if (delta > 0) {
     st.score = Math.max(0, st.score + delta);
     st.glow = 1; st.pop = 1; st.kick = Math.min(3.2, st.kick + (delta >= 250 ? 2.4 : 1.1));
-    spawnRise(team, delta); ringPulse(team);
+    spawnRise(team, delta); ringPulse(team); addStars(team, 12);
     sfx(delta >= 250 ? "launch" : "arm", delta >= 250 ? Math.min(1, delta / 2500) : true);
     checkWin(team); updateHud(team);
   } else if (delta < 0) {
@@ -309,49 +332,50 @@ function resetTowerShape(team) { const st = state[team]; st.bw = SIZE; st.topW =
 function placeOne(team) {
   const st = state[team];
   if (towerFrozen(team)) return; // paused side (mid reset or mid win countdown) can't be clicked
-  const moverX = st.moverOffset;          // where the block is right now
-  const d = moverX - st.topX;             // misalignment vs the block below
+  const moverX = st.moverOffset, size = st.topW;
+  const delta = moverX - st.topX;         // how far off the block below it landed
+  const overhang = Math.abs(delta);
+  const overlap = size - overhang;
+  if (overlap <= 0) {
+    // COMPLETE MISS — landed in the void, no overlap. Whole block falls, tower drops 10.
+    spawnSlicePiece(team, size, Math.sign(delta) || 1, st.topX + (Math.sign(delta) || 1) * size, false);
+    st.score = Math.max(0, st.score - MISS_PENALTY); st.streak = 0; st.shake = Math.min(11, st.shake + 2.4);
+    flash(teamName(team) + " MISS  −" + MISS_PENALTY, "#ff5a52"); sfx("miss"); updateHud(team); return;
+  }
   st.score += 1;
   const idx = Math.round(st.score);
-  if (Math.abs(d) <= PERFECT_W) {
-    // PERFECT: keep width + position; every 5 in a row grow the block back toward full
+  if (overhang <= ASSIST * size) {
+    // PERFECT: snap on, keep size; every 5 in a row grow back toward full (re-centering)
     st.streak++;
-    if (st.streak % 5 === 0 && st.topW < SIZE) { st.topW = Math.min(SIZE, st.topW + GROW_W); const tp = towerTop(team); rings.push({ x: tp.x, y: tp.y, r: 8, life: 1, color: "#6bff9a", grow: 4, fade: 0.012, smoke: true }); sfx("grow"); }
+    if (st.streak % 5 === 0 && st.topW < SIZE) { const w0 = st.topW; st.topW = Math.min(SIZE, w0 + GROW_W); st.topX -= st.topX * ((st.topW - w0) / Math.max(0.001, SIZE - w0)); addStars(team); sfx("grow"); }
     else sfx("perfect", st.streak);
     st.glow = 0.7;
-    // topX unchanged (snap aligned)
   } else {
-    // MISS: only the overlapping part survives, positioned right where you dropped it (still connected)
-    const cur = st.topW || SIZE;
-    const overlap = Math.max(MIN_W, cur - Math.abs(d));
-    const overhang = cur - overlap;
-    // surviving block sits over the overlap between mover [moverX±cur/2] and below [topX±cur/2]
-    const left = Math.max(moverX - cur / 2, st.topX - cur / 2), right = Math.min(moverX + cur / 2, st.topX + cur / 2);
-    st.topX = (left + right) / 2;
-    st.topW = overlap;
-    spawnSlicePiece(team, overhang, Math.sign(d) || 1, moverX);
-    st.streak = 0; st.shake = Math.min(9, st.shake + 1.0); sfx("slice");
+    // SLICE: only the overlap survives, sitting right where you dropped it (leans, still connected)
+    spawnSlicePiece(team, overhang, Math.sign(delta) || 1, moverX, false);
+    st.topX = (moverX + st.topX) / 2; st.topW = overlap;
+    st.streak = 0; st.shake = Math.min(8, st.shake + 0.8); sfx("slice");
   }
   st.bw = st.topW;
   st.widths[idx] = st.topW; st.offsets[idx] = st.topX;
   delete st.widths[idx - POOL - 6]; delete st.offsets[idx - POOL - 6];
-  st.pop = 1; ringPulse(team);
+  st.pop = 1;
   checkWin(team); updateHud(team);
 }
 function stackClick() { ensureAudio(); placeOne("red"); placeOne("blue"); }
-function missPenalty() { // clicked off the play field -> both towers drop 10
-  ensureAudio(); let any = false;
-  for (const team of ["red", "blue"]) { const st = state[team]; if (towerFrozen(team)) continue; st.score = Math.max(0, st.score - 10); st.shake = Math.min(10, st.shake + 2.5); updateHud(team); any = true; }
-  if (any) { shake = Math.min(12, shake + 3); flash("MISS  −10", "#ff5a52"); sfx("miss"); }
-}
-function spawnSlicePiece(team, w, dir, moverX) {
+function spawnSlicePiece(team, w, dir, pieceX, whole) {
   if (w < 0.4) return;
   const t = towers[team], y0 = BOX_HEIGHT * (Math.floor(state[team].disp) + 1);
   const g = new THREE.Group(); g.scale.set(w, BOX_HEIGHT, state[team].topW || SIZE);
-  g.position.set(moverX + dir * (state[team].topW / 2), y0, 0); addEdges(g);
+  g.position.set(pieceX - dir * (w / 2), y0, 0); addEdges(g);
   const mat = new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 40, specular: new THREE.Color(0x5a5a5a), color: new THREE.Color(t.palette[0]) });
   g.add(new THREE.Mesh(unitGeo, mat)); t.scene.add(g);
-  debris.push({ team, g, mat, vx: dir * (0.35 + Math.random() * 0.3), vy: 0.2, vz: 0, rx: dir * 0.04, ry: 0, rz: dir * 0.12, life: 1 });
+  debris.push({ team, g, mat, vx: dir * (whole ? 0.5 : 0.35) + (Math.random() * 0.2 - 0.1), vy: whole ? 0.05 : 0.2, vz: 0, rx: dir * 0.05, ry: 0, rz: dir * 0.13, life: 1 });
+}
+// little star sparkles bursting out (used on grow + gift up + explosions)
+function addStars(team, n, big) {
+  const t = towerTop(team); n = n || 10; const col = team === "red" ? "#ffd76b" : "#9fe4ff";
+  for (let i = 0; i < n; i++) { const a = Math.random() * Math.PI * 2, sp = (big ? 4 : 2.5) + Math.random() * 3; particles.push({ x: t.x, y: t.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp * 0.65 - 1, life: 1, decay: 0.014 + Math.random() * 0.012, color: Math.random() < 0.5 ? col : "#ffffff", size: 6 + Math.random() * 5, g: 0.05, star: true }); }
 }
 /* ---- per-side countdown timers (reset & pending-win) ---- */
 const RESET_SECS = 30, WIN_SECS = 30;
@@ -446,13 +470,10 @@ function spawnRise(team, delta) {
   const acc = team === "red" ? ["#ff6d84", "#ffd76b", "#ffffff"] : ["#7fd0ff", "#4dffea", "#ffffff"];
   for (let i = 0; i < n; i++) particles.push({ x: t.x + (Math.random() * 2 - 1) * 52, y: t.y + Math.random() * 44, vx: (Math.random() * 2 - 1) * 0.6, vy: -(3 + Math.random() * 3.6), life: 1, decay: 0.02 + Math.random() * 0.02, color: acc[(Math.random() * acc.length) | 0], size: 3 + Math.random() * 4, g: -0.02 });
 }
-function ringPulse(team) { // big SMOKE ring on going up: grows past the blocks, lingers, fades (throttled + jittered)
-  const st = state[team];
-  if (T - (st.lastRingT || -9) < 0.42) return; // don't spam one per rapid click
-  st.lastRingT = T;
-  if (rings.length > 6) rings.shift();
+function ringPulse(team) { // big SMOKE ring on GIFT up: grows well past the blocks, lingers a few seconds, fades
+  if (rings.length > 8) rings.shift();
   const t = towerTop(team);
-  rings.push({ x: t.x + (Math.random() * 2 - 1) * 20, y: t.y + (Math.random() * 2 - 1) * 12, r: 10 + Math.random() * 8, life: 1, color: TEAMS[team].accent, grow: 1.15, fade: 0.007, smoke: true });
+  rings.push({ x: t.x, y: t.y, r: 16, life: 1, color: TEAMS[team].accent, grow: 1.7, fade: 0.006, smoke: true });
 }
 function dropBomb(team, amount, wipe) { const t = towerTop(team); bombs.push({ team, x: t.x, y: -34, vy: 2.6, targetY: t.y, amount: amount || 0, wipe: !!wipe, landed: false, fuse: 0 }); sfx("dive", 0.5); }
 function explodeBomb(b) {
@@ -460,10 +481,12 @@ function explodeBomb(b) {
   if (b.wipe) st.score = 0; else st.score = Math.max(0, st.score - b.amount); // blocks removed NOW, on the blast
   updateHud(b.team);
   const col = b.team === "red" ? "#ff5a72" : "#ffb347";
-  for (let i = 0; i < 34; i++) { const a = Math.random() * Math.PI * 2, sp = 2 + Math.random() * 7; particles.push({ x: b.x, y: b.targetY, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 2, life: 1, decay: 0.018 + Math.random() * 0.02, color: Math.random() < 0.5 ? col : "#fff", size: 4 + Math.random() * 7, g: 0.22 }); }
-  rings.push({ x: b.x, y: b.targetY, r: 8, life: 1, color: col, grow: 9 });
-  spawnDebris(b.team, Math.min(16, 5 + Math.round((b.amount || 400) / 160)));
-  st.shake = Math.min(22, st.shake + 7); shake = Math.min(18, shake + 2.8);
+  for (let i = 0; i < 40; i++) { const a = Math.random() * Math.PI * 2, sp = 2 + Math.random() * 8; particles.push({ x: b.x, y: b.targetY, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 2, life: 1, decay: 0.018 + Math.random() * 0.02, color: Math.random() < 0.5 ? col : "#fff", size: 4 + Math.random() * 7, g: 0.22 }); }
+  rings.push({ x: b.x, y: b.targetY, r: 8, life: 1, color: col, grow: 12 });
+  addStars(b.team, 16, true);                       // comic star burst
+  explosionText.push({ team: b.team, x: b.x, y: b.targetY, life: 1 });
+  spawnDebris(b.team, Math.min(18, 6 + Math.round((b.amount || 400) / 150)));
+  st.shake = Math.min(24, st.shake + 8); shake = Math.min(18, shake + 3);
   sfx("explode", Math.min(1, 0.5 + (b.amount || 400) / 2000)); sfx("boom", false);
 }
 function spawnFlyers(from, to, n) { const a = towerTop(from), b = towerTop(to), col = to === "red" ? "#ff5a72" : "#39d0ff"; for (let i = 0; i < n; i++) flyers.push({ sx: a.x, sy: a.y, ex: b.x + (Math.random() * 40 - 20), ey: b.y - Math.random() * 30, t: -i * 0.03, dur: 0.55 + Math.random() * 0.2, color: col }); }
@@ -568,16 +591,11 @@ function init() {
     if (e.ctrlKey || e.altKey || e.metaKey) return;
     for (const a in binds) { if (binds[a] === k) { e.preventDefault(); doAction(a); break; } }
   });
-  // click / tap on the play field stacks BOTH towers (+1 each); clicking OFF the field = both -10
+  // click / tap on the play field DROPS the moving block on both towers (real stack: perfect / slice / whiff)
   stageEl.addEventListener("pointerdown", (e) => {
     if (document.body.classList.contains("editing")) return;
     if (e.target.closest && e.target.closest("#panel, #menuBtn, .movable, button, input")) return;
     stackClick();
-  });
-  window.addEventListener("pointerdown", (e) => {
-    if (document.body.classList.contains("editing")) return;
-    if (e.target.closest && e.target.closest("#stage, #panel, button, input")) return; // only the black area outside
-    missPenalty();
   });
   setInterval(() => { tickTeam("red"); tickTeam("blue"); }, 1000); // per-side countdowns
   requestAnimationFrame(frame);
