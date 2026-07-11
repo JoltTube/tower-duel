@@ -54,8 +54,8 @@ let binds; try { binds = Object.assign({}, BIND_DEFAULT, JSON.parse(load("binds"
 })();
 
 const state = {
-  red: { score: 0, disp: 0, wins: parseInt(load("wins_red", 0), 10) || 0, glow: 0, kick: 0, shake: 0, pop: 0, resetSecs: 0, winSecs: 0, bw: SIZE, topW: SIZE, topX: 0, streak: 0, widths: {}, offsets: {}, moverOffset: 0 },
-  blue: { score: 0, disp: 0, wins: parseInt(load("wins_blue", 0), 10) || 0, glow: 0, kick: 0, shake: 0, pop: 0, resetSecs: 0, winSecs: 0, bw: SIZE, topW: SIZE, topX: 0, streak: 0, widths: {}, offsets: {}, moverOffset: 0 },
+  red: { score: 0, disp: 0, wins: parseInt(load("wins_red", 0), 10) || 0, glow: 0, kick: 0, shake: 0, pop: 0, resetSecs: 0, winSecs: 0, streak: 0, moverOffset: 0, queue: 0, qStep: 0.4 },
+  blue: { score: 0, disp: 0, wins: parseInt(load("wins_blue", 0), 10) || 0, glow: 0, kick: 0, shake: 0, pop: 0, resetSecs: 0, winSecs: 0, streak: 0, moverOffset: 0, queue: 0, qStep: 0.4 },
 };
 
 /* ---------------- three.js setup ---------------- */
@@ -302,25 +302,36 @@ function drawFX() {
 }
 
 /* ---------------- actions ---------------- */
-function updateHud(team) { const st = state[team]; el(team + "Score").textContent = Math.round(st.score); el(team + "Goal").textContent = winScore; el(team + "Wins").textContent = st.wins; el(team + "Fill").style.width = Math.max(0, Math.min(100, (st.score / winScore) * 100)) + "%"; }
+function updateHud(team) {
+  const st = state[team];
+  // a pending win is CANCELLED if the score falls back below the goal (you must be at goal+ to win)
+  if (st.winSecs > 0 && Math.round(st.score) < winScore) { st.winSecs = 0; hideTimer(team); flash(teamName(team) + " DROPPED BELOW " + winScore + "!", "#ff5a52"); sfx("dive", 0.5); }
+  el(team + "Score").textContent = Math.round(st.score); el(team + "Goal").textContent = winScore; el(team + "Wins").textContent = st.wins;
+  el(team + "Fill").style.width = Math.max(0, Math.min(100, (st.score / winScore) * 100)) + "%";
+}
 function bumpWin(team) { const h = el(team + "WinsBox"); h.classList.remove("bump-win"); void h.offsetWidth; h.classList.add("bump-win"); }
 // Hitting winScore no longer banks instantly — it starts a 30s PENDING WIN the
 // other side can steal before it lands.
 function checkWin(team) {
   const st = state[team];
   // reaching the goal starts a pending win; the score STAYS at the goal until it lands/steals
-  if (st.score >= winScore && st.winSecs <= 0 && st.resetSecs <= 0) startWinCountdown(team);
+  if (Math.round(st.score) >= winScore && st.winSecs <= 0 && st.resetSecs <= 0) startWinCountdown(team);
+}
+// gifts don't snap the score — they QUEUE it so the tower visibly climbs / shrinks over ~2s
+function queueScore(team, delta) {
+  const st = state[team];
+  st.queue += delta;
+  st.qStep = Math.max(0.35, Math.abs(st.queue) / 150); // ~2.5s to drain the current queue
 }
 function addPoints(team, delta) {
   const st = state[team];
   if (delta > 0) {
-    st.score = Math.max(0, st.score + delta);
+    queueScore(team, delta);
     st.glow = 1; st.pop = 1; st.kick = Math.min(3.2, st.kick + (delta >= 250 ? 2.4 : 1.1));
     spawnRise(team, delta); ringPulse(team); addStars(team, 12);
     sfx(delta >= 250 ? "launch" : "arm", delta >= 250 ? Math.min(1, delta / 2500) : true);
-    checkWin(team); updateHud(team);
   } else if (delta < 0) {
-    dropBomb(team, -delta, false); // score drops only when the bomb explodes (~2s after it lands)
+    dropBomb(team, -delta, false); // dynamite falls + fuses ~2s, then queues the drop (tower shrinks gradually)
   }
 }
 function addWin(team) { const st = state[team]; st.wins++; save("wins_" + team, st.wins); bumpWin(team); spawnConfetti(150, team); flash("+1 WIN — " + teamName(team), TEAMS[team].accent); sfx("boom", true); sfx("milestone"); updateHud(team); }
@@ -389,22 +400,23 @@ function doReset(team) { // countdown hit zero -> collapse the tower immediately
   const st = state[team], tp = towerTop(team);
   spawnDebris(team, 16);
   rings.push({ x: tp.x, y: tp.y, r: 8, life: 1, color: team === "red" ? "#ff5a72" : "#ffb347", grow: 11 });
-  st.score = 0; st.resetSecs = 0; hideTimer(team); resetTowerShape(team);
+  st.score = 0; st.queue = 0; st.resetSecs = 0; hideTimer(team); resetTowerShape(team);
   st.shake = Math.min(24, st.shake + 9); shake = Math.min(20, shake + 3); updateHud(team);
   flash(teamName(team) + " RESET", TEAMS[team].accent); sfx("reset"); sfx("explode", 0.9);
 }
 function startWinCountdown(team) {
-  const st = state[team]; st.winSecs = WIN_SECS; showTimer(team, "WIN IN", st.winSecs, WIN_SECS, false, "win");
+  const st = state[team]; st.queue = Math.min(0, st.queue); st.winSecs = WIN_SECS; showTimer(team, "WIN IN", st.winSecs, WIN_SECS, false, "win"); // stop the climb at the goal
+  flash(teamName(team) + " WIN INCOMING!", TEAMS[team].accent); sfx("milestone");
   flash(teamName(team) + " WIN INCOMING!", TEAMS[team].accent); sfx("milestone");
 }
 function confirmWin(team) { // countdown landed -> award the win and NOW reset the tower to 0
   const st = state[team]; st.winSecs = 0; hideTimer(team);
   st.wins++; save("wins_" + team, st.wins); bumpWin(team); spawnConfetti(170, team);
-  st.score = 0; resetTowerShape(team); updateHud(team);
+  st.score = 0; st.queue = 0; resetTowerShape(team); updateHud(team);
   flash(teamName(team) + " WIN!", TEAMS[team].accent); sfx("boom", true); sfx("milestone");
 }
 function stealWin(byTeam, fromTeam) { // fromTeam had the pending win; byTeam grabs it
-  state[fromTeam].winSecs = 0; hideTimer(fromTeam); state[fromTeam].score = 0; resetTowerShape(fromTeam); updateHud(fromTeam);
+  state[fromTeam].winSecs = 0; hideTimer(fromTeam); state[fromTeam].score = 0; state[fromTeam].queue = 0; resetTowerShape(fromTeam); updateHud(fromTeam);
   const st = state[byTeam]; st.wins++; save("wins_" + byTeam, st.wins); bumpWin(byTeam);
   spawnFlyers(fromTeam, byTeam, 12); spawnConfetti(180, byTeam);
   flash(teamName(byTeam) + " STOLE THE WIN!", TEAMS[byTeam].accent); sfx("boom", true); sfx("milestone"); updateHud(byTeam);
@@ -462,7 +474,8 @@ function ringPulse(team) { // big SMOKE ring on GIFT up: grows well past the blo
 function dropBomb(team, amount, wipe) { const t = towerTop(team); bombs.push({ team, x: t.x, y: -34, vy: 2.6, targetY: t.y, amount: amount || 0, wipe: !!wipe, landed: false, fuse: 0 }); sfx("dive", 0.5); }
 function explodeBomb(b) {
   const st = state[b.team];
-  if (b.wipe) st.score = 0; else st.score = Math.max(0, st.score - b.amount); // blocks removed NOW, on the blast
+  // queue the drop so the tower shrinks gradually after the blast (noticeable), not an instant snap
+  if (b.wipe) queueScore(b.team, -(st.score + st.queue)); else queueScore(b.team, -b.amount);
   updateHud(b.team);
   const col = b.team === "red" ? "#ff5a72" : "#ffb347";
   for (let i = 0; i < 40; i++) { const a = Math.random() * Math.PI * 2, sp = 2 + Math.random() * 8; particles.push({ x: b.x, y: b.targetY, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 2, life: 1, decay: 0.018 + Math.random() * 0.02, color: Math.random() < 0.5 ? col : "#fff", size: 4 + Math.random() * 7, g: 0.22 }); }
@@ -491,7 +504,17 @@ function resize() {
 }
 function frame() {
   T += 1 / 60; shake *= 0.86;
-  for (const t of ["red", "blue"]) { const st = state[t]; st.disp += (st.score - st.disp) * 0.16; st.glow *= 0.94; st.kick *= 0.8; st.shake *= 0.86; st.pop *= 0.88; }
+  for (const t of ["red", "blue"]) {
+    const st = state[t];
+    // drain queued gift/bomb points gradually so the tower visibly climbs / shrinks
+    if (Math.abs(st.queue) >= 0.001) {
+      const dir = Math.sign(st.queue), step = Math.min(Math.abs(st.queue), st.qStep) * dir;
+      st.score = Math.max(0, st.score + step); st.queue -= step;
+      if (dir > 0) { st.glow = Math.max(st.glow, 0.5); checkWin(t); }
+      updateHud(t);
+    }
+    st.disp += (st.score - st.disp) * 0.2; st.glow *= 0.94; st.kick *= 0.8; st.shake *= 0.86; st.pop *= 0.88;
+  }
   updateDebris();
   drawBG(); updateTower("red"); updateTower("blue"); renderThree(); drawFX();
   requestAnimationFrame(frame);
