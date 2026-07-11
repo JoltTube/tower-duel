@@ -34,6 +34,11 @@ const BLUE_PALETTE = [0x2f9dff];  // one solid blue
 
 /* stack look (matches the original game) */
 const BOX_HEIGHT = 2.2, SIZE = 8, VIEW_H = 47, POOL = 30, STAGE_RATIO = 0.82;
+/* click-to-stack tuning */
+const SLIDE_AMP = SIZE * 0.55;   // how far the moving block slides each way
+const PERFECT_W = SIZE * 0.14;   // |offset| within this = perfect (no slice)
+const GROW_W = SIZE * 0.22;      // width regained every 5-perfect streak
+const MIN_W = SIZE * 0.22;       // narrowest a tower can slice down to
 
 let winScore = parseInt(load("winScore", 1000), 10) || 1000;
 const amounts = {};
@@ -47,8 +52,8 @@ let binds; try { binds = Object.assign({}, BIND_DEFAULT, JSON.parse(load("binds"
 })();
 
 const state = {
-  red: { score: 0, disp: 0, wins: parseInt(load("wins_red", 0), 10) || 0, glow: 0, kick: 0, shake: 0, pop: 0, resetSecs: 0, winSecs: 0 },
-  blue: { score: 0, disp: 0, wins: parseInt(load("wins_blue", 0), 10) || 0, glow: 0, kick: 0, shake: 0, pop: 0, resetSecs: 0, winSecs: 0 },
+  red: { score: 0, disp: 0, wins: parseInt(load("wins_red", 0), 10) || 0, glow: 0, kick: 0, shake: 0, pop: 0, resetSecs: 0, winSecs: 0, bw: SIZE, streak: 0, widths: {}, moverOffset: 0 },
+  blue: { score: 0, disp: 0, wins: parseInt(load("wins_blue", 0), 10) || 0, glow: 0, kick: 0, shake: 0, pop: 0, resetSecs: 0, winSecs: 0, bw: SIZE, streak: 0, widths: {}, moverOffset: 0 },
 };
 
 /* ---------------- three.js setup ---------------- */
@@ -116,21 +121,20 @@ function updateTower(team) {
     if (idx < 0) { b.group.visible = false; continue; }
     b.group.visible = true; b.group.position.set(0, BOX_HEIGHT * idx, 0);
     const popS = k === 0 ? 1 + st.pop * 0.16 : 1;
-    b.group.scale.set(SIZE * popS, BOX_HEIGHT * popS, SIZE * popS);
+    const w = st.widths[idx] || SIZE;                    // per-block width (sliced by clicks)
+    b.group.scale.set(w * popS, BOX_HEIGHT * popS, w * popS);
     b.mat.color.setHex(t.palette[idx % t.palette.length]);
     const gl = st.glow * (k < 3 ? 0.4 : 0.18); b.mat.emissive.setRGB(gl, gl, gl);
   }
+  // moving block (always sliding, synced across both towers so they meet in the middle together)
+  st.moverOffset = resetting ? 0 : Math.sin(T * 1.6) * SLIDE_AMP;
   const mv = t.mover;
-  if (st.score <= 0) { mv.group.visible = false; }
-  else {
-    mv.group.visible = true;
-    const mpop = 1 + st.pop * 0.22;
-    mv.group.scale.set(SIZE * mpop, BOX_HEIGHT * mpop, SIZE * mpop);
-    const slide = resetting ? 0 : Math.sin(T * 1.5 + (team === "red" ? 0 : Math.PI)) * 5; // freeze while resetting
-    mv.group.position.set(slide, BOX_HEIGHT * (topIdx + 1), 0);
-    mv.mat.color.setHex(t.palette[(topIdx + 1) % t.palette.length]);
-    mv.mat.emissive.setRGB(0.14 + st.glow * 0.3, 0.14 + st.glow * 0.3, 0.14 + st.glow * 0.3);
-  }
+  mv.group.visible = true;
+  const mpop = 1 + st.pop * 0.22;
+  mv.group.scale.set(st.bw * mpop, BOX_HEIGHT * mpop, st.bw * mpop);
+  mv.group.position.set(st.moverOffset, BOX_HEIGHT * (topIdx + 1), 0);
+  mv.mat.color.setHex(t.palette[(topIdx + 1) % t.palette.length]);
+  mv.mat.emissive.setRGB(0.14 + st.glow * 0.3, 0.14 + st.glow * 0.3, 0.14 + st.glow * 0.3);
 }
 function setCam(team) {
   const st = state[team], camY = BOX_HEIGHT * st.disp;
@@ -289,6 +293,40 @@ function addPoints(team, delta) {
 }
 function addWin(team) { const st = state[team]; st.wins++; save("wins_" + team, st.wins); bumpWin(team); spawnConfetti(150, team); flash("+1 WIN — " + teamName(team), TEAMS[team].accent); sfx("boom", true); sfx("milestone"); updateHud(team); }
 function subWin(team) { const st = state[team]; if (st.wins > 0) st.wins--; save("wins_" + team, st.wins); bumpWin(team); flash("-1 WIN — " + teamName(team), "#ff5a52"); sfx("dive", 0.6); updateHud(team); }
+function resetTowerShape(team) { const st = state[team]; st.bw = SIZE; st.streak = 0; st.widths = {}; }
+
+/* ---- CLICK-TO-STACK: a click places on BOTH towers (+1 each). Perfect keeps width,
+   a miss slices the overhang off, every 5 perfects grows the block back. No streak UI. ---- */
+function placeOne(team) {
+  const t = towers[team], st = state[team];
+  if (st.resetSecs > 0) return; // don't stack a tower that's mid-reset
+  const off = Math.abs(st.moverOffset);
+  st.score += 1;
+  const idx = Math.round(st.score);
+  if (off <= PERFECT_W) {
+    st.streak++;
+    if (st.streak % 5 === 0 && st.bw < SIZE) { st.bw = Math.min(SIZE, st.bw + GROW_W); const tp = towerTop(team); rings.push({ x: tp.x, y: tp.y, r: 6, life: 1, color: "#6bff9a", grow: 8, fade: 0.045, smoke: true }); sfx("grow"); }
+    else sfx("perfect", st.streak);
+    st.glow = 0.7;
+  } else {
+    const overhang = Math.min(off, st.bw);
+    spawnSlicePiece(team, overhang, Math.sign(st.moverOffset) || 1);
+    st.bw = Math.max(MIN_W, st.bw - overhang);
+    st.streak = 0; st.shake = Math.min(10, st.shake + 1.1); sfx("slice");
+  }
+  st.widths[idx] = st.bw; delete st.widths[idx - POOL - 6]; // prune off-screen widths
+  st.pop = 1; ringPulse(team, false);
+  checkWin(team); updateHud(team);
+}
+function stackClick() { ensureAudio(); placeOne("red"); placeOne("blue"); }
+function spawnSlicePiece(team, w, dir) {
+  const t = towers[team], y0 = BOX_HEIGHT * (Math.floor(state[team].disp) + 1);
+  const g = new THREE.Group(); g.scale.set(Math.max(0.9, w), BOX_HEIGHT, SIZE * 0.85);
+  g.position.set(dir * (state[team].bw / 2), y0, 0); addHull(g);
+  const mat = new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 40, specular: new THREE.Color(0x5a5a5a), color: new THREE.Color(t.palette[0]) });
+  g.add(new THREE.Mesh(unitGeo, mat)); t.scene.add(g);
+  debris.push({ team, g, mat, vx: dir * (0.45 + Math.random() * 0.4), vy: 0.35, vz: 0, rx: dir * 0.05, ry: 0, rz: dir * 0.13, life: 1 });
+}
 /* ---- per-side countdown timers (reset & pending-win) ---- */
 const RESET_SECS = 30, WIN_SECS = 30;
 function showTimer(team, label, secs, total, urgent, mode) {
@@ -316,7 +354,7 @@ function doReset(team) { // countdown hit zero -> collapse the tower immediately
   const st = state[team], tp = towerTop(team);
   spawnDebris(team, 16);
   rings.push({ x: tp.x, y: tp.y, r: 8, life: 1, color: team === "red" ? "#ff5a72" : "#ffb347", grow: 11 });
-  st.score = 0; st.resetSecs = 0; hideTimer(team);
+  st.score = 0; st.resetSecs = 0; hideTimer(team); resetTowerShape(team);
   st.shake = Math.min(24, st.shake + 9); shake = Math.min(20, shake + 3); updateHud(team);
   flash(teamName(team) + " RESET", TEAMS[team].accent); sfx("reset"); sfx("explode", 0.9);
 }
@@ -327,11 +365,11 @@ function startWinCountdown(team) {
 function confirmWin(team) { // countdown landed -> award the win and NOW reset the tower to 0
   const st = state[team]; st.winSecs = 0; hideTimer(team);
   st.wins++; save("wins_" + team, st.wins); bumpWin(team); spawnConfetti(170, team);
-  st.score = 0; updateHud(team);
+  st.score = 0; resetTowerShape(team); updateHud(team);
   flash(teamName(team) + " WIN!", TEAMS[team].accent); sfx("boom", true); sfx("milestone");
 }
 function stealWin(byTeam, fromTeam) { // fromTeam had the pending win; byTeam grabs it
-  state[fromTeam].winSecs = 0; hideTimer(fromTeam); state[fromTeam].score = 0; updateHud(fromTeam);
+  state[fromTeam].winSecs = 0; hideTimer(fromTeam); state[fromTeam].score = 0; resetTowerShape(fromTeam); updateHud(fromTeam);
   const st = state[byTeam]; st.wins++; save("wins_" + byTeam, st.wins); bumpWin(byTeam);
   spawnFlyers(fromTeam, byTeam, 12); spawnConfetti(180, byTeam);
   flash(teamName(byTeam) + " STOLE THE WIN!", TEAMS[byTeam].accent); sfx("boom", true); sfx("milestone"); updateHud(byTeam);
@@ -494,6 +532,12 @@ function init() {
     const tag = e.target && e.target.tagName; if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
     if (e.ctrlKey || e.altKey || e.metaKey) return;
     for (const a in binds) { if (binds[a] === k) { e.preventDefault(); doAction(a); break; } }
+  });
+  // click / tap anywhere on the play field stacks BOTH towers (+1 each)
+  stageEl.addEventListener("pointerdown", (e) => {
+    if (document.body.classList.contains("editing")) return;
+    if (e.target.closest && e.target.closest("#panel, #menuBtn, .movable, button, input")) return;
+    stackClick();
   });
   setInterval(() => { tickTeam("red"); tickTeam("blue"); }, 1000); // per-side countdowns
   requestAnimationFrame(frame);
