@@ -35,12 +35,13 @@ const BLUE_PALETTE = [0x2f9dff];  // one solid blue
 /* stack look (matches the original game) */
 const BOX_HEIGHT = 2.2, SIZE = 6.4, VIEW_H = 50, POOL = 30, STAGE_RATIO = 0.82;
 /* click-to-stack tuning (ported from the stack game: slide, drop, slice, perfect, grow) */
-const SLIDE_AMP = SIZE * 1.15;   // slides fully past the edge, so you CAN whiff into the void
-const SLIDE_F = 0.34;            // slide speed (full back-and-forth ~3s), constant speed
+const SPAWN_OFFSET = SIZE * 1.15; // fixed slide range each way (extremes = a whiff)
 const ASSIST = 0.16;             // within this fraction of the block = a PERFECT (snap on)
 const GROW_W = SIZE * 0.22;      // size regained every 5-perfect streak
+const MIN_W = SIZE * 0.3;        // block never slices thinner than this (so it stays playable)
 const MISS_PENALTY = 10;         // complete whiff (no overlap) drops the tower this many
 const tri = (p) => 4 * Math.abs((p % 1 + 1) % 1 - 0.5) - 1; // -1..1 triangle wave (constant speed)
+let slideSpeed = Math.max(0.08, Math.min(0.6, parseFloat(load("slideSpeed", "0.2")) || 0.2)); // full slide cycles/sec-ish
 
 let winScore = parseInt(load("winScore", 1000), 10) || 1000;
 const amounts = {};
@@ -95,8 +96,9 @@ function buildScene(palette) {
   for (let k = 0; k <= POOL; k++) pool.push(addBlock(scene));   // last one is the mover
   return { scene, pool, mover: pool[POOL], palette };
 }
-// bold black outline on EVERY edge (incl. the top-face edges) so you can read a perfect
-function addEdges(group) { group.add(FAT ? new THREE.LineSegments2(lineGeo, edgeMat) : new THREE.LineSegments(unitEdges, edgeMat)); }
+// clean black silhouette stroke around each rounded block (inverted hull)
+let OUTLINE_MAT;
+function addEdges(group) { const o = new THREE.Mesh(unitGeo, OUTLINE_MAT); o.scale.set(1.05, 1.16, 1.05); group.add(o); }
 function addBlock(scene) {
   const group = new THREE.Group(); group.scale.set(SIZE, BOX_HEIGHT, SIZE);
   const mat = new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 46, specular: new THREE.Color(0x5a5a5a), emissive: new THREE.Color(0x000000) });
@@ -109,11 +111,8 @@ function setupThree() {
   const canvas = el("game");
   renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, stencil: false, powerPreference: "high-performance" });
   renderer.setClearColor(0x000000, 0); renderer.autoClear = false;
-  unitGeo = new THREE.BoxGeometry(1, 0.86, 1); applyVertexShade(unitGeo); // clean sharp cube (leaves a groove between blocks)
-  unitEdges = new THREE.EdgesGeometry(unitGeo);                            // outline from the SAME geo -> perfectly aligned on every edge
-  FAT = !!(THREE.LineSegmentsGeometry && THREE.LineMaterial && THREE.LineSegments2);
-  if (FAT) { lineGeo = new THREE.LineSegmentsGeometry().fromEdgesGeometry(unitEdges); edgeMat = new THREE.LineMaterial({ color: 0x0a0a12, linewidth: 3.5 }); }
-  else edgeMat = new THREE.LineBasicMaterial({ color: 0x0a0a12 });
+  unitGeo = roundedBox(1, 0.82, 1, 0.07, 4); applyVertexShade(unitGeo); // rounded/curvy edges
+  OUTLINE_MAT = new THREE.MeshBasicMaterial({ color: 0x0a0a12, side: THREE.BackSide });
   cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 500);
   towers.red = buildScene(RED_PALETTE); towers.blue = buildScene(BLUE_PALETTE);
 }
@@ -131,8 +130,8 @@ function updateTower(team) {
     b.mat.color.setHex(t.palette[idx % t.palette.length]);
     const gl = st.glow * (k < 3 ? 0.4 : 0.18); b.mat.emissive.setRGB(gl, gl, gl);
   }
-  // moving block: constant-speed slide over the block below, blue mirrors red (opposite dir, meet in middle), frozen when paused
-  st.moverOffset = towerFrozen(team) ? st.topX : st.topX + tri(T * SLIDE_F) * SLIDE_AMP * (team === "red" ? 1 : -1);
+  // moving block: constant-speed slide across a FIXED range (like the real stack game); blue mirrors red; frozen when paused
+  st.moverOffset = towerFrozen(team) ? st.topX : tri(T * slideSpeed) * SPAWN_OFFSET * (team === "red" ? 1 : -1);
   const mv = t.mover;
   mv.group.visible = true;
   const mpop = 1 + st.pop * 0.22;
@@ -351,9 +350,11 @@ function placeOne(team) {
     else sfx("perfect", st.streak);
     st.glow = 0.7;
   } else {
-    // SLICE: only the overlap survives, sitting right where you dropped it (leans, still connected)
+    // SLICE: only the overlap survives, sitting right where you dropped it (leans, still connected).
+    // Kept at MIN_W minimum so it never needles down to an un-hittable sliver.
+    const newW = Math.max(MIN_W, overlap);
     spawnSlicePiece(team, overhang, Math.sign(delta) || 1, moverX, false);
-    st.topX = (moverX + st.topX) / 2; st.topW = overlap;
+    st.topX = (moverX + st.topX) / 2; st.topW = newW;
     st.streak = 0; st.shake = Math.min(8, st.shake + 0.8); sfx("slice");
   }
   st.bw = st.topW;
@@ -502,7 +503,6 @@ function resize() {
   renderer.setPixelRatio(DPR); renderer.setSize(W, H, false);
   const halfAspect = (W / 2) / H, viewW = VIEW_H * halfAspect;
   cam.left = -viewW / 2; cam.right = viewW / 2; cam.top = VIEW_H / 2; cam.bottom = -VIEW_H / 2; cam.updateProjectionMatrix();
-  if (FAT && edgeMat.resolution) edgeMat.resolution.set(W / 2, H); // fat-line thickness in px per half-viewport
   skyRed = makeSky(0, W / 2); skyBlue = makeSky(W / 2, W);
 }
 function frame() {
@@ -574,6 +574,8 @@ function init() {
   initMovable();
   const vol = el("volRange"); let v = parseInt(load("vol", 60), 10); vol.value = v; if (window.SFX) SFX.setVolume(v / 100);
   vol.addEventListener("input", () => { v = +vol.value; save("vol", v); if (window.SFX) SFX.setVolume(v / 100); });
+  const spd = el("speedRange"); spd.value = Math.round(slideSpeed * 100);
+  spd.addEventListener("input", () => { slideSpeed = +spd.value / 100; save("slideSpeed", slideSpeed); });
   const wsi = el("winScoreInput"); wsi.value = winScore;
   wsi.addEventListener("change", () => { winScore = Math.max(10, parseInt(wsi.value, 10) || 1000); wsi.value = winScore; save("winScore", winScore); updateHud("red"); updateHud("blue"); });
   const panel = el("panel"); const toggle = () => { ensureAudio(); panel.classList.toggle("open"); };
