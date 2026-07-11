@@ -94,6 +94,9 @@ body.editing .movable.grabbing { cursor: grabbing; outline: 2px solid #fff; }
 .blue.side-timer .st-label { color: #86d3ff; }
 .red.side-timer .st-fill { background: linear-gradient(90deg, #ff8a3c, #ff2d55); }
 .blue.side-timer .st-fill { background: linear-gradient(90deg, #4dffea, #38b6ff); }
+.st-sub { font-weight: 900; font-size: 12px; letter-spacing: 1px; text-transform: uppercase; color: #ffd14d; text-shadow: 0 0 8px rgba(255,209,77,0.7); margin-top: 3px; animation: subBlink 0.9s ease-in-out infinite; }
+.st-sub:empty { display: none; }
+@keyframes subBlink { 0%,100% { opacity: 0.55; } 50% { opacity: 1; } }
 .side-timer.urgent .st-num { color: #ff5a52; animation: numPulse 0.5s ease infinite alternate; }
 @keyframes numPulse { from { transform: scale(1); } to { transform: scale(1.16); } }
 

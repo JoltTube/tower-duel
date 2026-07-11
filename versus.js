@@ -33,12 +33,12 @@ const RED_PALETTE = [0xff3d5a];   // one solid red
 const BLUE_PALETTE = [0x2f9dff];  // one solid blue
 
 /* stack look (matches the original game) */
-const BOX_HEIGHT = 2.2, SIZE = 8, VIEW_H = 47, POOL = 30, STAGE_RATIO = 0.82;
+const BOX_HEIGHT = 2.2, SIZE = 6.4, VIEW_H = 50, POOL = 30, STAGE_RATIO = 0.82;
 /* click-to-stack tuning */
-const SLIDE_AMP = SIZE * 0.55;   // how far the moving block slides each way
-const PERFECT_W = SIZE * 0.14;   // |offset| within this = perfect (no slice)
-const GROW_W = SIZE * 0.22;      // width regained every 5-perfect streak
-const MIN_W = SIZE * 0.22;       // narrowest a tower can slice down to
+const SLIDE_AMP = SIZE * 0.6;    // how far the moving block slides each way
+const PERFECT_W = SIZE * 0.13;   // misalignment within this = perfect (no slice)
+const GROW_W = SIZE * 0.2;       // width regained every 5-perfect streak
+const MIN_W = SIZE * 0.2;        // narrowest a tower can slice down to
 
 let winScore = parseInt(load("winScore", 1000), 10) || 1000;
 const amounts = {};
@@ -52,13 +52,13 @@ let binds; try { binds = Object.assign({}, BIND_DEFAULT, JSON.parse(load("binds"
 })();
 
 const state = {
-  red: { score: 0, disp: 0, wins: parseInt(load("wins_red", 0), 10) || 0, glow: 0, kick: 0, shake: 0, pop: 0, resetSecs: 0, winSecs: 0, bw: SIZE, streak: 0, widths: {}, moverOffset: 0 },
-  blue: { score: 0, disp: 0, wins: parseInt(load("wins_blue", 0), 10) || 0, glow: 0, kick: 0, shake: 0, pop: 0, resetSecs: 0, winSecs: 0, bw: SIZE, streak: 0, widths: {}, moverOffset: 0 },
+  red: { score: 0, disp: 0, wins: parseInt(load("wins_red", 0), 10) || 0, glow: 0, kick: 0, shake: 0, pop: 0, resetSecs: 0, winSecs: 0, bw: SIZE, topW: SIZE, topX: 0, streak: 0, widths: {}, offsets: {}, moverOffset: 0 },
+  blue: { score: 0, disp: 0, wins: parseInt(load("wins_blue", 0), 10) || 0, glow: 0, kick: 0, shake: 0, pop: 0, resetSecs: 0, winSecs: 0, bw: SIZE, topW: SIZE, topX: 0, streak: 0, widths: {}, offsets: {}, moverOffset: 0 },
 };
 
 /* ---------------- three.js setup ---------------- */
 const stageEl = el("stage");
-let renderer, cam, unitGeo, unitEdges, lineGeo, outlineMat, FAT = false;
+let renderer, cam, unitGeo, unitEdges, lineGeo, edgeMat, FAT = false;
 let towers = {};
 let W = 0, H = 0, T = 0, DPR = Math.min(1.75, window.devicePixelRatio || 1);
 
@@ -93,14 +93,13 @@ function buildScene(palette) {
   for (let k = 0; k <= POOL; k++) pool.push(addBlock(scene));   // last one is the mover
   return { scene, pool, mover: pool[POOL], palette };
 }
-let OUTLINE_MAT;
-// thin black silhouette; block geometry is < 1 tall so the hull never bleeds into neighbours
-function addHull(group) { const o = new THREE.Mesh(unitGeo, OUTLINE_MAT); o.scale.set(1.05, 1.16, 1.05); group.add(o); }
+// bold black outline on EVERY edge (incl. the top-face edges) so you can read a perfect
+function addEdges(group) { group.add(FAT ? new THREE.LineSegments2(lineGeo, edgeMat) : new THREE.LineSegments(unitEdges, edgeMat)); }
 function addBlock(scene) {
   const group = new THREE.Group(); group.scale.set(SIZE, BOX_HEIGHT, SIZE);
-  addHull(group); // clean black silhouette stroke around the whole block
   const mat = new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 46, specular: new THREE.Color(0x5a5a5a), emissive: new THREE.Color(0x000000) });
   group.add(new THREE.Mesh(unitGeo, mat));
+  addEdges(group);
   scene.add(group);
   return { group, mat };
 }
@@ -108,26 +107,30 @@ function setupThree() {
   const canvas = el("game");
   renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, stencil: false, powerPreference: "high-performance" });
   renderer.setClearColor(0x000000, 0); renderer.autoClear = false;
-  unitGeo = roundedBox(1, 0.82, 1, 0.05, 4); applyVertexShade(unitGeo); // <1 tall leaves a clean groove between stacked blocks
-  OUTLINE_MAT = new THREE.MeshBasicMaterial({ color: 0x07070d, side: THREE.BackSide });
+  unitGeo = roundedBox(1, 0.82, 1, 0.028, 3); applyVertexShade(unitGeo); // barely rounded
+  unitEdges = new THREE.EdgesGeometry(new THREE.BoxGeometry(0.99, 0.8, 0.99)); // sharp-box edges -> clean 12 lines on every edge
+  FAT = !!(THREE.LineSegmentsGeometry && THREE.LineMaterial && THREE.LineSegments2);
+  if (FAT) { lineGeo = new THREE.LineSegmentsGeometry().fromEdgesGeometry(unitEdges); edgeMat = new THREE.LineMaterial({ color: 0x0a0a12, linewidth: 3 }); }
+  else edgeMat = new THREE.LineBasicMaterial({ color: 0x0a0a12 });
   cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 500);
   towers.red = buildScene(RED_PALETTE); towers.blue = buildScene(BLUE_PALETTE);
 }
+function towerFrozen(team) { const st = state[team]; return st.resetSecs > 0 || st.winSecs > 0; } // no motion / no clicking
 function updateTower(team) {
   const t = towers[team], st = state[team], disp = st.disp, topIdx = Math.floor(disp);
-  const resetting = st.resetSecs > 0; // tower just FREEZES while resetting (the bounce is on the timer)
   for (let k = 0; k < POOL; k++) {
     const idx = topIdx - k, b = t.pool[k];
     if (idx < 0) { b.group.visible = false; continue; }
-    b.group.visible = true; b.group.position.set(0, BOX_HEIGHT * idx, 0);
+    b.group.visible = true;
+    const w = st.widths[idx] || SIZE, x = st.offsets[idx] || 0;  // per-block width + lean position
     const popS = k === 0 ? 1 + st.pop * 0.16 : 1;
-    const w = st.widths[idx] || SIZE;                    // per-block width (sliced by clicks)
+    b.group.position.set(x, BOX_HEIGHT * idx, 0);
     b.group.scale.set(w * popS, BOX_HEIGHT * popS, w * popS);
     b.mat.color.setHex(t.palette[idx % t.palette.length]);
     const gl = st.glow * (k < 3 ? 0.4 : 0.18); b.mat.emissive.setRGB(gl, gl, gl);
   }
-  // moving block (always sliding, synced across both towers so they meet in the middle together)
-  st.moverOffset = resetting ? 0 : Math.sin(T * 1.6) * SLIDE_AMP;
+  // moving block: opposite directions (blue mirrors red) but both cross the centre together; frozen when paused
+  st.moverOffset = towerFrozen(team) ? st.topX : Math.sin(T * 1.6) * SLIDE_AMP * (team === "red" ? 1 : -1);
   const mv = t.mover;
   mv.group.visible = true;
   const mpop = 1 + st.pop * 0.22;
@@ -161,7 +164,7 @@ function spawnDebris(team, n) {
     const g = new THREE.Group(), sz = SIZE * (0.42 + Math.random() * 0.34);
     g.scale.set(sz, BOX_HEIGHT * (0.7 + Math.random() * 0.5), sz);
     g.position.set((Math.random() * 2 - 1) * SIZE * 0.42, y0 - Math.random() * BOX_HEIGHT * 4, (Math.random() * 2 - 1) * SIZE * 0.42);
-    addHull(g);
+    addEdges(g);
     const mat = new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 40, specular: new THREE.Color(0x5a5a5a), color: new THREE.Color(t.palette[(topIdx - i + 300) % t.palette.length]) });
     g.add(new THREE.Mesh(unitGeo, mat));
     t.scene.add(g);
@@ -186,7 +189,7 @@ const fx = el("fx"), fxx = fx.getContext("2d");
 let skyRed = [], skyBlue = [];
 let particles = [], bombs = [], flyers = [], rings = [], debris = [], shake = 0;
 function makeSky(x0, x1) { const a = []; let x = x0, s = Math.floor(x0) + 13; const rnd = () => { s = (s * 9301 + 49297) % 233280; return s / 233280; }; while (x < x1) { const w = 14 + rnd() * 26, h = 24 + rnd() * 120; a.push({ x, w, h }); x += w + 3 + rnd() * 9; } return a; }
-function towerTop(team) { return { x: team === "red" ? W * 0.25 : W * 0.75, y: H * 0.33 }; }
+function towerTop(team) { return { x: team === "red" ? W * 0.25 : W * 0.75, y: H * 0.47 }; } // screen pos of the tower top
 function drawBG() {
   bgx.setTransform(DPR, 0, 0, DPR, 0, 0); bgx.clearRect(0, 0, W, H);
   drawSide(0, W / 2, "red"); drawSide(W / 2, W, "blue");
@@ -230,7 +233,7 @@ function drawFX() {
   if (shake > 0.2) fxx.translate((Math.random() * 2 - 1) * shake, (Math.random() * 2 - 1) * shake);
   // bombs: fall -> land on the tower -> sizzle for ~2s -> explode
   for (let i = bombs.length - 1; i >= 0; i--) {
-    const b = bombs[i]; b.targetY = towerTop(b.team).y - 14;
+    const b = bombs[i]; b.targetY = towerTop(b.team).y - 18; // rest the stick ON the top block
     if (!b.landed) {
       b.vy += 0.5; b.y += b.vy;
       if (b.y >= b.targetY) { b.landed = true; b.y = b.targetY; b.fuse = 0; sfx("tntland"); }
@@ -239,14 +242,20 @@ function drawFX() {
       if (b.fuse % 9 === 0) sfx("fuse", Math.min(1, b.fuse / 120));
       if (b.fuse >= 120) { explodeBomb(b); bombs.splice(i, 1); continue; }
     }
-    const armT = b.landed ? b.fuse / 120 : 0;                 // 0..1 as it's about to blow
-    const flash = b.landed && b.fuse > 84 && (b.fuse % 8 < 4); // red blink near the end
-    fxx.save();
-    if (armT > 0) { fxx.shadowColor = "rgba(255,80,40,0.9)"; fxx.shadowBlur = 8 + armT * 22; }
-    fxx.fillStyle = flash ? "#ff3b2e" : "#161616"; fxx.beginPath(); fxx.arc(b.x, b.y, 15, 0, 7); fxx.fill();
-    fxx.strokeStyle = "#000"; fxx.lineWidth = 2; fxx.stroke();
-    const ss = 3 + Math.random() * (2 + armT * 4);            // fuse spark grows as it arms
-    fxx.fillStyle = "#ffd24d"; fxx.beginPath(); fxx.arc(b.x + 9, b.y - 16 + Math.random() * 3, ss, 0, 7); fxx.fill();
+    const armT = b.landed ? b.fuse / 120 : 0;                  // 0..1 as it's about to blow
+    const blink = b.landed && b.fuse > 84 && (b.fuse % 8 < 4);  // red blink near the end
+    const dw = 10, dh = 32;
+    fxx.save(); fxx.translate(b.x, b.y);
+    const grd = fxx.createLinearGradient(-dw, 0, dw, 0);
+    grd.addColorStop(0, "#7e1420"); grd.addColorStop(0.5, blink ? "#ff6a4c" : "#e23b2e"); grd.addColorStop(1, "#7e1420");
+    fxx.fillStyle = grd; fxx.fillRect(-dw, -dh / 2, dw * 2, dh);
+    fxx.strokeStyle = "#2a0509"; fxx.lineWidth = 2; fxx.strokeRect(-dw, -dh / 2, dw * 2, dh);
+    fxx.fillStyle = "#f2c14e"; fxx.fillRect(-dw, -dh / 2 + 5, dw * 2, 3); fxx.fillRect(-dw, dh / 2 - 8, dw * 2, 3);
+    fxx.strokeStyle = "#c8a56a"; fxx.lineWidth = 2.5; fxx.beginPath(); fxx.moveTo(0, -dh / 2); fxx.quadraticCurveTo(8, -dh / 2 - 9, 3, -dh / 2 - 16); fxx.stroke();
+    const ss = 2.5 + Math.random() * (2 + armT * 5);           // fuse spark grows as it arms
+    fxx.shadowColor = "rgba(255,120,40,0.95)"; fxx.shadowBlur = 6 + armT * 24;
+    fxx.fillStyle = "#ffd24d"; fxx.beginPath(); fxx.arc(3, -dh / 2 - 16, ss, 0, 7); fxx.fill();
+    fxx.fillStyle = "#fff2c0"; fxx.beginPath(); fxx.arc(3, -dh / 2 - 16, ss * 0.5, 0, 7); fxx.fill();
     fxx.restore();
   }
   // rings (soft smoke rings on build, sharp shock rings on blasts)
@@ -284,7 +293,7 @@ function addPoints(team, delta) {
   if (delta > 0) {
     st.score = Math.max(0, st.score + delta);
     st.glow = 1; st.pop = 1; st.kick = Math.min(3.2, st.kick + (delta >= 250 ? 2.4 : 1.1));
-    spawnRise(team, delta); ringPulse(team, delta >= 250);
+    spawnRise(team, delta); ringPulse(team);
     sfx(delta >= 250 ? "launch" : "arm", delta >= 250 ? Math.min(1, delta / 2500) : true);
     checkWin(team); updateHud(team);
   } else if (delta < 0) {
@@ -293,39 +302,56 @@ function addPoints(team, delta) {
 }
 function addWin(team) { const st = state[team]; st.wins++; save("wins_" + team, st.wins); bumpWin(team); spawnConfetti(150, team); flash("+1 WIN — " + teamName(team), TEAMS[team].accent); sfx("boom", true); sfx("milestone"); updateHud(team); }
 function subWin(team) { const st = state[team]; if (st.wins > 0) st.wins--; save("wins_" + team, st.wins); bumpWin(team); flash("-1 WIN — " + teamName(team), "#ff5a52"); sfx("dive", 0.6); updateHud(team); }
-function resetTowerShape(team) { const st = state[team]; st.bw = SIZE; st.streak = 0; st.widths = {}; }
+function resetTowerShape(team) { const st = state[team]; st.bw = SIZE; st.topW = SIZE; st.topX = 0; st.streak = 0; st.widths = {}; st.offsets = {}; }
 
 /* ---- CLICK-TO-STACK: a click places on BOTH towers (+1 each). Perfect keeps width,
    a miss slices the overhang off, every 5 perfects grows the block back. No streak UI. ---- */
 function placeOne(team) {
-  const t = towers[team], st = state[team];
-  if (st.resetSecs > 0) return; // don't stack a tower that's mid-reset
-  const off = Math.abs(st.moverOffset);
+  const st = state[team];
+  if (towerFrozen(team)) return; // paused side (mid reset or mid win countdown) can't be clicked
+  const moverX = st.moverOffset;          // where the block is right now
+  const d = moverX - st.topX;             // misalignment vs the block below
   st.score += 1;
   const idx = Math.round(st.score);
-  if (off <= PERFECT_W) {
+  if (Math.abs(d) <= PERFECT_W) {
+    // PERFECT: keep width + position; every 5 in a row grow the block back toward full
     st.streak++;
-    if (st.streak % 5 === 0 && st.bw < SIZE) { st.bw = Math.min(SIZE, st.bw + GROW_W); const tp = towerTop(team); rings.push({ x: tp.x, y: tp.y, r: 6, life: 1, color: "#6bff9a", grow: 8, fade: 0.045, smoke: true }); sfx("grow"); }
+    if (st.streak % 5 === 0 && st.topW < SIZE) { st.topW = Math.min(SIZE, st.topW + GROW_W); const tp = towerTop(team); rings.push({ x: tp.x, y: tp.y, r: 8, life: 1, color: "#6bff9a", grow: 4, fade: 0.012, smoke: true }); sfx("grow"); }
     else sfx("perfect", st.streak);
     st.glow = 0.7;
+    // topX unchanged (snap aligned)
   } else {
-    const overhang = Math.min(off, st.bw);
-    spawnSlicePiece(team, overhang, Math.sign(st.moverOffset) || 1);
-    st.bw = Math.max(MIN_W, st.bw - overhang);
-    st.streak = 0; st.shake = Math.min(10, st.shake + 1.1); sfx("slice");
+    // MISS: only the overlapping part survives, positioned right where you dropped it (still connected)
+    const cur = st.topW || SIZE;
+    const overlap = Math.max(MIN_W, cur - Math.abs(d));
+    const overhang = cur - overlap;
+    // surviving block sits over the overlap between mover [moverX±cur/2] and below [topX±cur/2]
+    const left = Math.max(moverX - cur / 2, st.topX - cur / 2), right = Math.min(moverX + cur / 2, st.topX + cur / 2);
+    st.topX = (left + right) / 2;
+    st.topW = overlap;
+    spawnSlicePiece(team, overhang, Math.sign(d) || 1, moverX);
+    st.streak = 0; st.shake = Math.min(9, st.shake + 1.0); sfx("slice");
   }
-  st.widths[idx] = st.bw; delete st.widths[idx - POOL - 6]; // prune off-screen widths
-  st.pop = 1; ringPulse(team, false);
+  st.bw = st.topW;
+  st.widths[idx] = st.topW; st.offsets[idx] = st.topX;
+  delete st.widths[idx - POOL - 6]; delete st.offsets[idx - POOL - 6];
+  st.pop = 1; ringPulse(team);
   checkWin(team); updateHud(team);
 }
 function stackClick() { ensureAudio(); placeOne("red"); placeOne("blue"); }
-function spawnSlicePiece(team, w, dir) {
+function missPenalty() { // clicked off the play field -> both towers drop 10
+  ensureAudio(); let any = false;
+  for (const team of ["red", "blue"]) { const st = state[team]; if (towerFrozen(team)) continue; st.score = Math.max(0, st.score - 10); st.shake = Math.min(10, st.shake + 2.5); updateHud(team); any = true; }
+  if (any) { shake = Math.min(12, shake + 3); flash("MISS  −10", "#ff5a52"); sfx("miss"); }
+}
+function spawnSlicePiece(team, w, dir, moverX) {
+  if (w < 0.4) return;
   const t = towers[team], y0 = BOX_HEIGHT * (Math.floor(state[team].disp) + 1);
-  const g = new THREE.Group(); g.scale.set(Math.max(0.9, w), BOX_HEIGHT, SIZE * 0.85);
-  g.position.set(dir * (state[team].bw / 2), y0, 0); addHull(g);
+  const g = new THREE.Group(); g.scale.set(w, BOX_HEIGHT, state[team].topW || SIZE);
+  g.position.set(moverX + dir * (state[team].topW / 2), y0, 0); addEdges(g);
   const mat = new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 40, specular: new THREE.Color(0x5a5a5a), color: new THREE.Color(t.palette[0]) });
   g.add(new THREE.Mesh(unitGeo, mat)); t.scene.add(g);
-  debris.push({ team, g, mat, vx: dir * (0.45 + Math.random() * 0.4), vy: 0.35, vz: 0, rx: dir * 0.05, ry: 0, rz: dir * 0.13, life: 1 });
+  debris.push({ team, g, mat, vx: dir * (0.35 + Math.random() * 0.3), vy: 0.2, vz: 0, rx: dir * 0.04, ry: 0, rz: dir * 0.12, life: 1 });
 }
 /* ---- per-side countdown timers (reset & pending-win) ---- */
 const RESET_SECS = 30, WIN_SECS = 30;
@@ -336,6 +362,7 @@ function showTimer(team, label, secs, total, urgent, mode) {
   el(team + "TimerLabel").textContent = label;
   el(team + "TimerNum").textContent = secs;
   el(team + "TimerFill").style.width = (secs / total * 100) + "%";
+  el(team + "TimerSub").textContent = mode === "win" ? "OTHER TEAM CAN STEAL THE WIN!" : "";
 }
 function hideTimer(team) { const t = el(team + "Timer"); t.classList.add("hidden"); t.classList.remove("reset-mode", "urgent"); }
 function startResetCountdown(team) {
@@ -419,7 +446,14 @@ function spawnRise(team, delta) {
   const acc = team === "red" ? ["#ff6d84", "#ffd76b", "#ffffff"] : ["#7fd0ff", "#4dffea", "#ffffff"];
   for (let i = 0; i < n; i++) particles.push({ x: t.x + (Math.random() * 2 - 1) * 52, y: t.y + Math.random() * 44, vx: (Math.random() * 2 - 1) * 0.6, vy: -(3 + Math.random() * 3.6), life: 1, decay: 0.02 + Math.random() * 0.02, color: acc[(Math.random() * acc.length) | 0], size: 3 + Math.random() * 4, g: -0.02 });
 }
-function ringPulse(team, big) { const t = towerTop(team); rings.push({ x: t.x, y: t.y, r: 6, life: 1, color: TEAMS[team].accent, grow: big ? 9 : 6, fade: big ? 0.035 : 0.05, smoke: true }); }
+function ringPulse(team) { // big SMOKE ring on going up: grows past the blocks, lingers, fades (throttled + jittered)
+  const st = state[team];
+  if (T - (st.lastRingT || -9) < 0.42) return; // don't spam one per rapid click
+  st.lastRingT = T;
+  if (rings.length > 6) rings.shift();
+  const t = towerTop(team);
+  rings.push({ x: t.x + (Math.random() * 2 - 1) * 20, y: t.y + (Math.random() * 2 - 1) * 12, r: 10 + Math.random() * 8, life: 1, color: TEAMS[team].accent, grow: 1.15, fade: 0.007, smoke: true });
+}
 function dropBomb(team, amount, wipe) { const t = towerTop(team); bombs.push({ team, x: t.x, y: -34, vy: 2.6, targetY: t.y, amount: amount || 0, wipe: !!wipe, landed: false, fuse: 0 }); sfx("dive", 0.5); }
 function explodeBomb(b) {
   const st = state[b.team];
@@ -445,6 +479,7 @@ function resize() {
   renderer.setPixelRatio(DPR); renderer.setSize(W, H, false);
   const halfAspect = (W / 2) / H, viewW = VIEW_H * halfAspect;
   cam.left = -viewW / 2; cam.right = viewW / 2; cam.top = VIEW_H / 2; cam.bottom = -VIEW_H / 2; cam.updateProjectionMatrix();
+  if (FAT && edgeMat.resolution) edgeMat.resolution.set(W / 2, H); // fat-line thickness in px per half-viewport
   skyRed = makeSky(0, W / 2); skyBlue = makeSky(W / 2, W);
 }
 function frame() {
@@ -533,11 +568,16 @@ function init() {
     if (e.ctrlKey || e.altKey || e.metaKey) return;
     for (const a in binds) { if (binds[a] === k) { e.preventDefault(); doAction(a); break; } }
   });
-  // click / tap anywhere on the play field stacks BOTH towers (+1 each)
+  // click / tap on the play field stacks BOTH towers (+1 each); clicking OFF the field = both -10
   stageEl.addEventListener("pointerdown", (e) => {
     if (document.body.classList.contains("editing")) return;
     if (e.target.closest && e.target.closest("#panel, #menuBtn, .movable, button, input")) return;
     stackClick();
+  });
+  window.addEventListener("pointerdown", (e) => {
+    if (document.body.classList.contains("editing")) return;
+    if (e.target.closest && e.target.closest("#stage, #panel, button, input")) return; // only the black area outside
+    missPenalty();
   });
   setInterval(() => { tickTeam("red"); tickTeam("blue"); }, 1000); // per-side countdowns
   requestAnimationFrame(frame);
