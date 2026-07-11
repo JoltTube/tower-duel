@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#05060a" />
+  <title>HEROES vs VILLAINS — Tower Duel</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Luckiest+Guy&family=Comic+Neue:wght@700;900&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="versus.css?v=4" />
+</head>
+<body>
+  <div id="stage">
+    <canvas id="bg"></canvas>       <!-- split synthwave background -->
+    <canvas id="game"></canvas>     <!-- three.js: both towers -->
+    <canvas id="fx"></canvas>       <!-- bombs / explosions / steal / warp -->
+    <div id="confetti" aria-hidden="true"></div>
+
+    <button id="menuBtn" class="movable" data-mv="menu">☰ CONTROLS</button>
+
+    <div class="side-hud red movable" id="redHud" data-mv="redHud">
+      <div class="team-title outline" id="redTitle">VILLAINS</div>
+      <div class="score-block"><span class="team-score" id="redScore">0</span><span class="score-goal">/ <b id="redGoal">1000</b></span></div>
+      <div class="goal-bar"><div class="goal-fill" id="redFill"></div></div>
+    </div>
+
+    <div class="side-hud blue movable" id="blueHud" data-mv="blueHud">
+      <div class="team-title outline" id="blueTitle">HEROES</div>
+      <div class="score-block"><span class="team-score" id="blueScore">0</span><span class="score-goal">/ <b id="blueGoal">1000</b></span></div>
+      <div class="goal-bar"><div class="goal-fill" id="blueFill"></div></div>
+    </div>
+
+    <!-- WINS are their own movable + scalable UI (placed where steal/reset used to be) -->
+    <div class="wins-box red movable" id="redWinsBox" data-mv="redWins">
+      <span class="tw-label" id="redWinsLabel">VILLAINS WINS</span>
+      <span class="tw-num" id="redWins">0</span>
+    </div>
+    <div class="wins-box blue movable" id="blueWinsBox" data-mv="blueWins">
+      <span class="tw-label" id="blueWinsLabel">HEROES WINS</span>
+      <span class="tw-num" id="blueWins">0</span>
+    </div>
+
+    <!-- Per-side countdown timers (reset / pending-win); shown only while active -->
+    <div class="side-timer red movable hidden" id="redTimer" data-mv="redTimer">
+      <div class="st-inner">
+        <div class="st-label" id="redTimerLabel">RESETTING</div>
+        <div class="st-num" id="redTimerNum">30</div>
+        <div class="st-bar"><div class="st-fill" id="redTimerFill"></div></div>
+      </div>
+    </div>
+    <div class="side-timer blue movable hidden" id="blueTimer" data-mv="blueTimer">
+      <div class="st-inner">
+        <div class="st-label" id="blueTimerLabel">RESETTING</div>
+        <div class="st-num" id="blueTimerNum">30</div>
+        <div class="st-bar"><div class="st-fill" id="blueTimerFill"></div></div>
+      </div>
+    </div>
+
+    <div id="flash"></div>
+  </div>
+
+  <div id="panel">
+    <div class="panel-head">
+      <h2>CONTROLS</h2>
+      <button id="panelClose" aria-label="Close">✕</button>
+    </div>
+    <div class="panel-scroll">
+      <div class="panel-card">
+        <label class="pl-toggle"><span>Edit layout (drag to move · scroll to resize)</span><input type="checkbox" id="editLayout" /><span class="pl-sw"></span></label>
+        <div class="pl-row"><span>Win at (points)</span><input type="number" id="winScoreInput" min="10" step="10" class="pl-num" /></div>
+        <div class="pl-row"><span>Sound</span><input type="range" id="volRange" min="0" max="100" step="1" value="60" /></div>
+        <button id="resetLayout" class="pl-textbtn">Reset layout to default</button>
+      </div>
+      <div class="panel-card team-card red-card">
+        <h3>RED TEAM · VILLAINS</h3>
+        <div id="redControls"></div>
+      </div>
+      <div class="panel-card team-card blue-card">
+        <h3>BLUE TEAM · HEROES</h3>
+        <div id="blueControls"></div>
+      </div>
+      <button id="resetBinds" class="pl-textbtn">Reset all keybinds</button>
+      <p class="pl-hint">Ctrl + M to open or close this panel</p>
+    </div>
+  </div>
+
+  <script src="lib/three.min.js?v=1"></script>
+  <script src="lib/LineSegmentsGeometry.js"></script>
+  <script src="lib/LineGeometry.js"></script>
+  <script src="lib/LineMaterial.js"></script>
+  <script src="lib/LineSegments2.js"></script>
+  <script src="lib/Line2.js"></script>
+  <script src="audio.js?v=4"></script>
+  <script src="versus.js?v=4"></script>
+</body>
+</html>
