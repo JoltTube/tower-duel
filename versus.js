@@ -110,10 +110,10 @@ function setupThree() {
   const canvas = el("game");
   renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, stencil: false, powerPreference: "high-performance" });
   renderer.setClearColor(0x000000, 0); renderer.autoClear = false;
-  unitGeo = new THREE.BoxGeometry(1, 0.86, 1); applyVertexShade(unitGeo);  // squared blocks (groove between)
+  unitGeo = new THREE.BoxGeometry(1, 0.985, 1); applyVertexShade(unitGeo); // nearly full height so stacked blocks touch (no gap)
   unitEdges = new THREE.EdgesGeometry(unitGeo);                             // same geo -> stroke on every edge, aligned
   FAT = !!(THREE.LineSegmentsGeometry && THREE.LineMaterial && THREE.LineSegments2);
-  if (FAT) { lineGeo = new THREE.LineSegmentsGeometry().fromEdgesGeometry(unitEdges); edgeBlack = new THREE.LineMaterial({ color: 0x0a0a12, linewidth: 3.5 }); edgeWhite = new THREE.LineMaterial({ color: 0xffffff, linewidth: 4.5 }); }
+  if (FAT) { lineGeo = new THREE.LineSegmentsGeometry().fromEdgesGeometry(unitEdges); edgeBlack = new THREE.LineMaterial({ color: 0x0a0a12, linewidth: 4 }); edgeWhite = new THREE.LineMaterial({ color: 0xffffff, linewidth: 5 }); }
   else { edgeBlack = new THREE.LineBasicMaterial({ color: 0x0a0a12 }); edgeWhite = new THREE.LineBasicMaterial({ color: 0xffffff }); }
   cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 500);
   towers.red = buildScene(RED_PALETTE); towers.blue = buildScene(BLUE_PALETTE);
@@ -338,7 +338,7 @@ function placeOne(team) {
     st.score += 1; st.pop = 1; st.glow = 0.6;
     st.streak = (st.streak || 0) + 1;
     ringPulse(team); addStars(team, 8);        // circle + stars on every click
-    sfx("place", st.streak);                   // satisfying clicky placement
+    sfx("place");                              // one satisfying, consistent placement sound
     checkWin(team); updateHud(team);
   } else {
     // MISTIMED -> the block slides right off the tower and you drop 10
