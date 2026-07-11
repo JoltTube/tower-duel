@@ -35,11 +35,9 @@ const BLUE_PALETTE = [0x2f9dff];  // one solid blue
 /* stack look (matches the original game) */
 const BOX_HEIGHT = 2.2, SIZE = 6.4, VIEW_H = 50, POOL = 30, STAGE_RATIO = 0.82;
 /* click-to-stack tuning (ported from the stack game: slide, drop, slice, perfect, grow) */
-const SPAWN_OFFSET = SIZE * 1.15; // fixed slide range each way (extremes = a whiff)
-const ASSIST = 0.16;             // within this fraction of the block = a PERFECT (snap on)
-const GROW_W = SIZE * 0.22;      // size regained every 5-perfect streak
-const MIN_W = SIZE * 0.3;        // block never slices thinner than this (so it stays playable)
-const MISS_PENALTY = 10;         // complete whiff (no overlap) drops the tower this many
+const SPAWN_OFFSET = SIZE * 1.2; // fixed slide range each way (block goes fully off at the extremes)
+const LAND_TOL = SIZE * 0.6;     // click with the block within this of centre = it lands; else it misses
+const MISS_PENALTY = 10;         // mistimed click -> block falls off, tower drops this many
 const tri = (p) => 4 * Math.abs((p % 1 + 1) % 1 - 0.5) - 1; // -1..1 triangle wave (constant speed)
 let slideSpeed = Math.max(0.08, Math.min(0.6, parseFloat(load("slideSpeed", "0.2")) || 0.2)); // full slide cycles/sec-ish
 
@@ -119,23 +117,22 @@ function setupThree() {
 function towerFrozen(team) { const st = state[team]; return st.resetSecs > 0 || st.winSecs > 0; } // no motion / no clicking
 function updateTower(team) {
   const t = towers[team], st = state[team], disp = st.disp, topIdx = Math.floor(disp);
-  for (let k = 0; k < POOL; k++) {
+  for (let k = 0; k < POOL; k++) {                    // every block is full size, stacked straight
     const idx = topIdx - k, b = t.pool[k];
     if (idx < 0) { b.group.visible = false; continue; }
     b.group.visible = true;
-    const w = st.widths[idx] || SIZE, x = st.offsets[idx] || 0;  // per-block width + lean position
     const popS = k === 0 ? 1 + st.pop * 0.16 : 1;
-    b.group.position.set(x, BOX_HEIGHT * idx, 0);
-    b.group.scale.set(w * popS, BOX_HEIGHT * popS, w * popS);
+    b.group.position.set(0, BOX_HEIGHT * idx, 0);
+    b.group.scale.set(SIZE * popS, BOX_HEIGHT * popS, SIZE * popS);
     b.mat.color.setHex(t.palette[idx % t.palette.length]);
     const gl = st.glow * (k < 3 ? 0.4 : 0.18); b.mat.emissive.setRGB(gl, gl, gl);
   }
-  // moving block: constant-speed slide across a FIXED range (like the real stack game); blue mirrors red; frozen when paused
-  st.moverOffset = towerFrozen(team) ? st.topX : tri(T * slideSpeed) * SPAWN_OFFSET * (team === "red" ? 1 : -1);
+  // moving block: full-size, slides across a fixed range over the tower; blue mirrors red; frozen when paused
+  st.moverOffset = towerFrozen(team) ? 0 : tri(T * slideSpeed) * SPAWN_OFFSET * (team === "red" ? 1 : -1);
   const mv = t.mover;
   mv.group.visible = true;
   const mpop = 1 + st.pop * 0.22;
-  mv.group.scale.set(st.bw * mpop, BOX_HEIGHT * mpop, st.bw * mpop);
+  mv.group.scale.set(SIZE * mpop, BOX_HEIGHT * mpop, SIZE * mpop);
   mv.group.position.set(st.moverOffset, BOX_HEIGHT * (topIdx + 1), 0);
   mv.mat.color.setHex(t.palette[(topIdx + 1) % t.palette.length]);
   mv.mat.emissive.setRGB(0.14 + st.glow * 0.3, 0.14 + st.glow * 0.3, 0.14 + st.glow * 0.3);
@@ -324,54 +321,34 @@ function addPoints(team, delta) {
 }
 function addWin(team) { const st = state[team]; st.wins++; save("wins_" + team, st.wins); bumpWin(team); spawnConfetti(150, team); flash("+1 WIN — " + teamName(team), TEAMS[team].accent); sfx("boom", true); sfx("milestone"); updateHud(team); }
 function subWin(team) { const st = state[team]; if (st.wins > 0) st.wins--; save("wins_" + team, st.wins); bumpWin(team); flash("-1 WIN — " + teamName(team), "#ff5a52"); sfx("dive", 0.6); updateHud(team); }
-function resetTowerShape(team) { const st = state[team]; st.bw = SIZE; st.topW = SIZE; st.topX = 0; st.streak = 0; st.widths = {}; st.offsets = {}; }
+function resetTowerShape(team) { state[team].streak = 0; }
 
 /* ---- CLICK-TO-STACK: a click places on BOTH towers (+1 each). Perfect keeps width,
    a miss slices the overhang off, every 5 perfects grows the block back. No streak UI. ---- */
+// Pure timing: land the block if it's over the tower when you click, else it falls off and you drop 10.
 function placeOne(team) {
   const st = state[team];
   if (towerFrozen(team)) return; // paused side (mid reset or mid win countdown) can't be clicked
-  const moverX = st.moverOffset, size = st.topW;
-  const delta = moverX - st.topX;         // how far off the block below it landed
-  const overhang = Math.abs(delta);
-  const overlap = size - overhang;
-  if (overlap <= 0) {
-    // COMPLETE MISS — landed in the void, no overlap. Whole block falls, tower drops 10.
-    spawnSlicePiece(team, size, Math.sign(delta) || 1, st.topX + (Math.sign(delta) || 1) * size, false);
-    st.score = Math.max(0, st.score - MISS_PENALTY); st.streak = 0; st.shake = Math.min(11, st.shake + 2.4);
-    flash(teamName(team) + " MISS  −" + MISS_PENALTY, "#ff5a52"); sfx("miss"); updateHud(team); return;
-  }
-  st.score += 1;
-  const idx = Math.round(st.score);
-  if (overhang <= ASSIST * size) {
-    // PERFECT: snap on, keep size; every 5 in a row grow back toward full (re-centering)
-    st.streak++;
-    if (st.streak % 5 === 0 && st.topW < SIZE) { const w0 = st.topW; st.topW = Math.min(SIZE, w0 + GROW_W); st.topX -= st.topX * ((st.topW - w0) / Math.max(0.001, SIZE - w0)); addStars(team); sfx("grow"); }
-    else sfx("perfect", st.streak);
-    st.glow = 0.7;
+  if (Math.abs(st.moverOffset) <= LAND_TOL) {
+    // TIMED RIGHT -> block lands (full size, straight), +1
+    st.score += 1; st.pop = 1; st.glow = 0.6;
+    sfx("perfect", (st.streak = (st.streak || 0) + 1));
+    checkWin(team); updateHud(team);
   } else {
-    // SLICE: only the overlap survives, sitting right where you dropped it (leans, still connected).
-    // Kept at MIN_W minimum so it never needles down to an un-hittable sliver.
-    const newW = Math.max(MIN_W, overlap);
-    spawnSlicePiece(team, overhang, Math.sign(delta) || 1, moverX, false);
-    st.topX = (moverX + st.topX) / 2; st.topW = newW;
-    st.streak = 0; st.shake = Math.min(8, st.shake + 0.8); sfx("slice");
+    // MISTIMED -> the block slides right off the tower and you drop 10
+    spawnMissBlock(team, Math.sign(st.moverOffset) || 1);
+    st.score = Math.max(0, st.score - MISS_PENALTY); st.streak = 0; st.shake = Math.min(11, st.shake + 2.4);
+    flash(teamName(team) + " MISS  −" + MISS_PENALTY, "#ff5a52"); sfx("miss"); updateHud(team);
   }
-  st.bw = st.topW;
-  st.widths[idx] = st.topW; st.offsets[idx] = st.topX;
-  delete st.widths[idx - POOL - 6]; delete st.offsets[idx - POOL - 6];
-  st.pop = 1;
-  checkWin(team); updateHud(team);
 }
 function stackClick() { ensureAudio(); placeOne("red"); placeOne("blue"); }
-function spawnSlicePiece(team, w, dir, pieceX, whole) {
-  if (w < 0.4) return;
+function spawnMissBlock(team, dir) { // the full block that missed tumbles off into the void
   const t = towers[team], y0 = BOX_HEIGHT * (Math.floor(state[team].disp) + 1);
-  const g = new THREE.Group(); g.scale.set(w, BOX_HEIGHT, state[team].topW || SIZE);
-  g.position.set(pieceX - dir * (w / 2), y0, 0); addEdges(g);
+  const g = new THREE.Group(); g.scale.set(SIZE, BOX_HEIGHT, SIZE);
+  g.position.set(state[team].moverOffset, y0, 0); addEdges(g);
   const mat = new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 40, specular: new THREE.Color(0x5a5a5a), color: new THREE.Color(t.palette[0]) });
   g.add(new THREE.Mesh(unitGeo, mat)); t.scene.add(g);
-  debris.push({ team, g, mat, vx: dir * (whole ? 0.5 : 0.35) + (Math.random() * 0.2 - 0.1), vy: whole ? 0.05 : 0.2, vz: 0, rx: dir * 0.05, ry: 0, rz: dir * 0.13, life: 1 });
+  debris.push({ team, g, mat, vx: dir * (0.5 + Math.random() * 0.3), vy: 0.1, vz: 0, rx: dir * 0.05, ry: 0, rz: dir * 0.14, life: 1 });
 }
 // little star sparkles bursting out (used on grow + gift up + explosions)
 function addStars(team, n, big) {
