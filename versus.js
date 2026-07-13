@@ -415,11 +415,17 @@ function confirmWin(team) { // countdown landed -> award the win and NOW reset t
   st.score = 0; st.queue = 0; resetTowerShape(team); updateHud(team);
   flash(teamName(team) + " WIN!", TEAMS[team].accent); sfx("boom", true); sfx("milestone");
 }
-function stealWin(byTeam, fromTeam) { // fromTeam had the pending win; byTeam grabs it
+function stealWin(byTeam, fromTeam) {
+  // HOT POTATO: stealing doesn't win instantly — it hands the thief an instant goal-score
+  // and a FRESH 30s countdown they now have to survive. The other side can steal it back,
+  // and it keeps bouncing until one side's countdown runs out (then that side actually wins).
   state[fromTeam].winSecs = 0; hideTimer(fromTeam); state[fromTeam].score = 0; state[fromTeam].queue = 0; resetTowerShape(fromTeam); updateHud(fromTeam);
-  const st = state[byTeam]; st.wins++; save("wins_" + byTeam, st.wins); bumpWin(byTeam);
-  spawnFlyers(fromTeam, byTeam, 12); spawnConfetti(180, byTeam);
-  flash(teamName(byTeam) + " STOLE THE WIN!", TEAMS[byTeam].accent); sfx("boom", true); sfx("milestone"); updateHud(byTeam);
+  const st = state[byTeam];
+  st.score = winScore; st.queue = 0; st.glow = 1; st.pop = 1; // instant goal score on the thief's tower
+  spawnFlyers(fromTeam, byTeam, 14); spawnConfetti(120, byTeam); addStars(byTeam, 14, true);
+  updateHud(byTeam);
+  startWinCountdown(byTeam);                                   // fresh 30s on their side
+  flash(teamName(byTeam) + " STOLE THE WIN!", TEAMS[byTeam].accent); sfx("boom", true);
 }
 function stealWinAction(team) { // dedicated "steal their win" control
   const oid = TEAMS[team].other;
