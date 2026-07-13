@@ -223,6 +223,15 @@ window.SFX = (function () {
     ui: function () {
       tone({ freq: 680, type: "sine", dur: 0.05, vol: 0.14 });
     },
+    // gift CLIMB: a light, satisfying block-stack blip. pass 0..1 progress so a rapid
+    // run of them sounds like the tower is climbing (pitch rises as it grows).
+    climb: function (p) {
+      p = p == null ? 0 : Math.max(0, Math.min(1, p));
+      const f = 300 + 820 * p;                                                                 // pitch climbs with the tower
+      noise({ dur: 0.012, f: 2800, fEnd: 800, vol: 0.07 });                                    // tiny "tap" of a block landing
+      tone({ freq: f, freqEnd: f * 1.22, type: "triangle", dur: 0.07, vol: 0.17, atk: 0.001, glideDur: 0.055, fm: { ratio: 2, depth: 0.28 }, lp: 7000, rev: 0.14 });
+      tone({ freq: f * 2, type: "sine", dur: 0.04, vol: 0.05, atk: 0.001, lp: 8000 });         // sparkle on top
+    },
     // soft satisfying "thock" — clicky like a nice keycap but rounded + musical, short, no harsh tail
     place: function () {
       noise({ dur: 0.018, f: 2400, fEnd: 600, vol: 0.15 });                                                  // muffled key click

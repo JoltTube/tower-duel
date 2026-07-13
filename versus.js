@@ -131,8 +131,8 @@ function updateTower(team) {
     const idx = topIdx - k, b = t.pool[k];
     if (idx < 0) { b.group.visible = false; continue; }
     b.group.visible = true;
-    // top block pops in (from ~60%) as it appears; a click adds an extra little squash
-    const popS = k === 0 ? (1 - st.blockPop * 0.42) * (1 + st.pop * 0.16) : 1;
+    // top block pops in BIG (from ~30%) as it appears so you really see each one land
+    const popS = k === 0 ? (1 - st.blockPop * 0.7) * (1 + st.pop * 0.16) : 1;
     b.group.position.set(0, BOX_HEIGHT * idx, 0);
     b.group.scale.set(SIZE * popS, BOX_HEIGHT * popS, SIZE * popS);
     b.mat.color.setHex(colorFor(t.palette, idx));
@@ -328,7 +328,8 @@ function checkWin(team) {
 function queueScore(team, delta) {
   const st = state[team];
   st.queue += delta;
-  st.qStep = Math.max(0.35, Math.abs(st.queue) / 150); // ~2.5s to drain the current queue
+  // UP climbs slow so you watch it stack block by block (~5-6s); DOWN shrinks a bit quicker
+  st.qStep = st.queue >= 0 ? Math.max(0.12, Math.abs(st.queue) / 320) : Math.max(0.35, Math.abs(st.queue) / 150);
 }
 function addPoints(team, delta) {
   const st = state[team];
@@ -525,17 +526,19 @@ function frame() {
       st.score = Math.max(0, st.score + step); st.queue -= step;
       if (dir > 0) {
         st.glow = Math.max(st.glow, 0.5); checkWin(t);
-        // rising energy ring that climbs the tower + sparkles, so the gift-up reads as blocks pushing up
-        if (T - st.climbRingT > 0.11) {
+        // big rising energy rings that climb the tower + sparkles + a stacking blip: the gift-up
+        // reads as blocks visibly pushing up, and you HEAR each one land
+        if (T - st.climbRingT > 0.13) {
           st.climbRingT = T; const tp = towerTop(t);
-          rings.push({ x: tp.x, y: tp.y + 52, r: SIZE * 2.4, life: 1, color: TEAMS[t].accent, grow: 0.9, fade: 0.028, ry: -3.6, smoke: true });
-          addStars(t, 3);
+          rings.push({ x: tp.x, y: tp.y + 60, r: SIZE * 3.2, life: 1, color: TEAMS[t].accent, grow: 1.3, fade: 0.02, ry: -3.2, smoke: true });
+          addStars(t, 6);
+          sfx("climb", Math.min(1, st.score / winScore));
         }
       }
       updateHud(t);
     }
-    st.disp += (st.score - st.disp) * (Math.abs(st.queue) > 0.001 ? 0.32 : 0.2); // snappier follow while a gift is climbing
-    st.blockPop *= 0.5; st.glow *= 0.94; st.kick *= 0.8; st.shake *= 0.86; st.pop *= 0.88;
+    st.disp += (st.score - st.disp) * (Math.abs(st.queue) > 0.001 ? 0.24 : 0.2); // follow the climb closely so blocks step up one by one
+    st.blockPop *= 0.74; st.glow *= 0.94; st.kick *= 0.8; st.shake *= 0.86; st.pop *= 0.88;
   }
   updateDebris();
   drawBG(); updateTower("red"); updateTower("blue"); renderThree(); drawFX();
