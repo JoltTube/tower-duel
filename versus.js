@@ -29,8 +29,11 @@ function applyNames() {
   el("redTitle").textContent = teamNames.red; el("blueTitle").textContent = teamNames.blue;
   el("redWinsLabel").textContent = teamNames.red + " WINS"; el("blueWinsLabel").textContent = teamNames.blue + " WINS";
 }
-const RED_PALETTE = [0xff3d5a];   // one solid red
-const BLUE_PALETTE = [0x2f9dff];  // one solid blue
+// mixed shades so the tower looks varied — a fresh pink/red (or blue) per block/click
+const RED_PALETTE = [0xff3d5a, 0xff5c8a, 0xff2d55, 0xff6b9d, 0xe8305a, 0xff4d7a, 0xff849e, 0xd6265a, 0xff3b73, 0xff738f];
+const BLUE_PALETTE = [0x2f9dff, 0x38b6ff, 0x1e78ff, 0x4dc3ff, 0x2b6fff, 0x39d0ff, 0x5ab0ff, 0x1e90ff, 0x53d8ff, 0x2f7bff];
+// stable pseudo-random shade per block index — adjacent blocks differ, each click reveals a new one
+function colorFor(pal, idx) { let h = ((idx + 1) * 374761393) >>> 0; h = ((h ^ (h >>> 13)) * 1274126177) >>> 0; return pal[h % pal.length]; }
 
 /* stack look (matches the original game) */
 const BOX_HEIGHT = 2.2, SIZE = 6.4, VIEW_H = 50, POOL = 30, STAGE_RATIO = 0.82;
@@ -54,8 +57,8 @@ let binds; try { binds = Object.assign({}, BIND_DEFAULT, JSON.parse(load("binds"
 })();
 
 const state = {
-  red: { score: 0, disp: 0, wins: parseInt(load("wins_red", 0), 10) || 0, glow: 0, kick: 0, shake: 0, pop: 0, resetSecs: 0, winSecs: 0, streak: 0, moverOffset: 0, queue: 0, qStep: 0.4 },
-  blue: { score: 0, disp: 0, wins: parseInt(load("wins_blue", 0), 10) || 0, glow: 0, kick: 0, shake: 0, pop: 0, resetSecs: 0, winSecs: 0, streak: 0, moverOffset: 0, queue: 0, qStep: 0.4 },
+  red: { score: 0, disp: 0, wins: parseInt(load("wins_red", 0), 10) || 0, glow: 0, kick: 0, shake: 0, pop: 0, resetSecs: 0, winSecs: 0, streak: 0, moverOffset: 0, queue: 0, qStep: 0.4, lastTop: 0, blockPop: 0, climbRingT: 0 },
+  blue: { score: 0, disp: 0, wins: parseInt(load("wins_blue", 0), 10) || 0, glow: 0, kick: 0, shake: 0, pop: 0, resetSecs: 0, winSecs: 0, streak: 0, moverOffset: 0, queue: 0, qStep: 0.4, lastTop: 0, blockPop: 0, climbRingT: 0 },
 };
 
 /* ---------------- three.js setup ---------------- */
@@ -121,14 +124,18 @@ function setupThree() {
 function towerFrozen(team) { const st = state[team]; return st.resetSecs > 0 || st.winSecs > 0; } // no motion / no clicking
 function updateTower(team) {
   const t = towers[team], st = state[team], disp = st.disp, topIdx = Math.floor(disp);
+  // each time a NEW block is revealed at the top (climbing up), pop it in from small so you SEE it land
+  if (topIdx > st.lastTop) st.blockPop = 1;
+  st.lastTop = topIdx;
   for (let k = 0; k < POOL; k++) {                    // every block is full size, stacked straight
     const idx = topIdx - k, b = t.pool[k];
     if (idx < 0) { b.group.visible = false; continue; }
     b.group.visible = true;
-    const popS = k === 0 ? 1 + st.pop * 0.16 : 1;
+    // top block pops in (from ~60%) as it appears; a click adds an extra little squash
+    const popS = k === 0 ? (1 - st.blockPop * 0.42) * (1 + st.pop * 0.16) : 1;
     b.group.position.set(0, BOX_HEIGHT * idx, 0);
     b.group.scale.set(SIZE * popS, BOX_HEIGHT * popS, SIZE * popS);
-    b.mat.color.setHex(t.palette[idx % t.palette.length]);
+    b.mat.color.setHex(colorFor(t.palette, idx));
     const gl = st.glow * (k < 3 ? 0.4 : 0.18); b.mat.emissive.setRGB(gl, gl, gl);
   }
   // moving block: full-size, slides across a fixed range over the tower; blue mirrors red; frozen when paused
@@ -138,7 +145,7 @@ function updateTower(team) {
   const mpop = 1 + st.pop * 0.22;
   mv.group.scale.set(SIZE * mpop, BOX_HEIGHT * mpop, SIZE * mpop);
   mv.group.position.set(st.moverOffset, BOX_HEIGHT * (topIdx + 1), 0);
-  mv.mat.color.setHex(t.palette[(topIdx + 1) % t.palette.length]);
+  mv.mat.color.setHex(colorFor(t.palette, topIdx + 1)); // next block's shade (kept when placed)
   mv.mat.emissive.setRGB(0.14 + st.glow * 0.3, 0.14 + st.glow * 0.3, 0.14 + st.glow * 0.3);
 }
 function setCam(team) {
@@ -167,7 +174,7 @@ function spawnDebris(team, n) {
     g.scale.set(sz, BOX_HEIGHT * (0.7 + Math.random() * 0.5), sz);
     g.position.set((Math.random() * 2 - 1) * SIZE * 0.42, y0 - Math.random() * BOX_HEIGHT * 4, (Math.random() * 2 - 1) * SIZE * 0.42);
     addEdges(g);
-    const mat = new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 40, specular: new THREE.Color(0x5a5a5a), color: new THREE.Color(t.palette[(topIdx - i + 300) % t.palette.length]) });
+    const mat = new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 40, specular: new THREE.Color(0x5a5a5a), color: new THREE.Color(colorFor(t.palette, topIdx - i)) });
     g.add(new THREE.Mesh(unitGeo, mat));
     t.scene.add(g);
     const dir = (Math.random() * 2 - 1);
@@ -262,7 +269,7 @@ function drawFX() {
   }
   // rings (soft smoke rings on build, sharp shock rings on blasts)
   for (let i = rings.length - 1; i >= 0; i--) {
-    const r = rings[i]; r.r += (r.grow || 6); r.life -= (r.fade || 0.05);
+    const r = rings[i]; r.r += (r.grow || 6); r.life -= (r.fade || 0.05); if (r.ry) r.y += r.ry;
     if (r.life <= 0) { rings.splice(i, 1); continue; }
     fxx.save();
     fxx.globalAlpha = Math.max(0, r.life) * (r.smoke ? 0.6 : 1);
@@ -363,7 +370,7 @@ function spawnMissBlock(team, dir) { // the full block that missed tumbles off i
   const t = towers[team], y0 = BOX_HEIGHT * (Math.floor(state[team].disp) + 1);
   const g = new THREE.Group(); g.scale.set(SIZE, BOX_HEIGHT, SIZE);
   g.position.set(state[team].moverOffset, y0, 0); addEdges(g);
-  const mat = new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 40, specular: new THREE.Color(0x5a5a5a), color: new THREE.Color(t.palette[0]) });
+  const mat = new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 40, specular: new THREE.Color(0x5a5a5a), color: new THREE.Color(colorFor(t.palette, Math.floor(state[team].disp) + 1)) });
   g.add(new THREE.Mesh(unitGeo, mat)); t.scene.add(g);
   debris.push({ team, g, mat, vx: dir * (0.5 + Math.random() * 0.3), vy: 0.1, vz: 0, rx: dir * 0.05, ry: 0, rz: dir * 0.14, life: 1 });
 }
@@ -516,10 +523,19 @@ function frame() {
     if (Math.abs(st.queue) >= 0.001) {
       const dir = Math.sign(st.queue), step = Math.min(Math.abs(st.queue), st.qStep) * dir;
       st.score = Math.max(0, st.score + step); st.queue -= step;
-      if (dir > 0) { st.glow = Math.max(st.glow, 0.5); checkWin(t); }
+      if (dir > 0) {
+        st.glow = Math.max(st.glow, 0.5); checkWin(t);
+        // rising energy ring that climbs the tower + sparkles, so the gift-up reads as blocks pushing up
+        if (T - st.climbRingT > 0.11) {
+          st.climbRingT = T; const tp = towerTop(t);
+          rings.push({ x: tp.x, y: tp.y + 52, r: SIZE * 2.4, life: 1, color: TEAMS[t].accent, grow: 0.9, fade: 0.028, ry: -3.6, smoke: true });
+          addStars(t, 3);
+        }
+      }
       updateHud(t);
     }
-    st.disp += (st.score - st.disp) * 0.2; st.glow *= 0.94; st.kick *= 0.8; st.shake *= 0.86; st.pop *= 0.88;
+    st.disp += (st.score - st.disp) * (Math.abs(st.queue) > 0.001 ? 0.32 : 0.2); // snappier follow while a gift is climbing
+    st.blockPop *= 0.5; st.glow *= 0.94; st.kick *= 0.8; st.shake *= 0.86; st.pop *= 0.88;
   }
   updateDebris();
   drawBG(); updateTower("red"); updateTower("blue"); renderThree(); drawFX();

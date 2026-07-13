@@ -79,17 +79,20 @@ body.editing .movable.grabbing { cursor: grabbing; outline: 2px solid #fff; }
 @keyframes winPop { 0%{transform:scale(1);} 40%{transform:scale(1.7);} 100%{transform:scale(1);} }
 
 /* ---------- Per-side countdown timer ---------- */
-.side-timer { display: flex; flex-direction: column; align-items: center; padding: 10px 24px 13px; border-radius: 16px; background: rgba(6,8,16,0.78); pointer-events: none; width: max-content; }
+.side-timer { position: relative; display: flex; flex-direction: column; align-items: center; padding: 14px 30px 16px; border-radius: 20px; background: linear-gradient(165deg, #16161f 0%, #0c0c13 60%, #08080d 100%); pointer-events: none; width: max-content; overflow: visible; }
+.side-timer::before, .side-timer::after { content: ""; position: absolute; inset: -8px; border-radius: 26px; border: 3px solid var(--ring, #fff); pointer-events: none; z-index: -1; animation: ringPulse 1.9s cubic-bezier(.2,.6,.3,1) infinite; }
+.side-timer::after { animation-delay: 0.95s; }
+@keyframes ringPulse { 0% { transform: scale(0.9); opacity: 0.85; } 100% { transform: scale(1.55); opacity: 0; } }
 .side-timer.hidden { display: none; }
-.st-inner { display: flex; flex-direction: column; align-items: center; gap: 5px; transform-origin: center center; }
+.st-inner { display: flex; flex-direction: column; align-items: center; gap: 6px; transform-origin: center center; }
 .side-timer.reset-mode .st-inner { animation: timerBounce 0.7s ease-in-out infinite; } /* the "in and out" is on the timer, not the tower */
 @keyframes timerBounce { 0%,100% { transform: scale(0.92); } 50% { transform: scale(1.08); } }
 .st-label { font-weight: 900; font-size: 14px; letter-spacing: 2px; text-transform: uppercase; }
 .st-num { font-family: 'Luckiest Guy', cursive; font-size: 54px; line-height: 1; color: #fff; -webkit-text-stroke: 2.5px #0a0a12; text-shadow: 0 3px 0 rgba(0,0,0,0.4); display: inline-block; }
 .st-bar { width: 150px; height: 8px; border-radius: 999px; background: rgba(0,0,0,0.5); overflow: hidden; }
 .st-fill { height: 100%; border-radius: 999px; width: 100%; transition: width 1s linear; }
-.red.side-timer { border: 2px solid rgba(255,60,90,0.9); box-shadow: 0 0 24px rgba(255,45,85,0.55); }
-.blue.side-timer { border: 2px solid rgba(56,182,255,0.9); box-shadow: 0 0 24px rgba(30,144,255,0.55); }
+.red.side-timer { --ring: #ff2d55; border: 2px solid rgba(255,60,90,0.95); box-shadow: 0 0 30px rgba(255,45,85,0.6), inset 0 1px 0 rgba(255,255,255,0.06); }
+.blue.side-timer { --ring: #38b6ff; border: 2px solid rgba(56,182,255,0.95); box-shadow: 0 0 30px rgba(30,144,255,0.6), inset 0 1px 0 rgba(255,255,255,0.06); }
 .red.side-timer .st-label { color: #ff8497; }
 .blue.side-timer .st-label { color: #86d3ff; }
 .red.side-timer .st-fill { background: linear-gradient(90deg, #ff8a3c, #ff2d55); }
